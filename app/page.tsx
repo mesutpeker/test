@@ -64,6 +64,8 @@ import {
   detectQuestions,
   layoutQuestions,
   columnDividerSegments,
+  testHeader,
+  headerStyles,
   createPdf,
   download,
   getPdfjs,
@@ -211,6 +213,61 @@ function IconButton({
     </button>
   );
 }
+function HeaderGraphic({
+  header,
+  ...props
+}: React.SVGProps<SVGSVGElement> & { header: ReturnType<typeof testHeader> }) {
+  return (
+    <svg viewBox={`0 0 ${PAGE.w} ${header.contentTop}`} {...props}>
+      <title>Test başlığı ve öğrenci bilgileri</title>
+      {header.boxes.map((box, i) => (
+        <rect
+          key={i}
+          x={box.x}
+          y={box.y}
+          width={box.w}
+          height={box.h}
+          fill={box.color}
+        />
+      ))}
+      {header.lines.map((line, i) => (
+        <line
+          key={i}
+          x1={line.x1}
+          y1={line.y1}
+          x2={line.x2}
+          y2={line.y2}
+          stroke={line.color}
+          strokeWidth={line.width}
+        />
+      ))}
+      {header.texts.map((text, i) => (
+        <text
+          key={i}
+          x={text.x}
+          y={text.y}
+          fontSize={text.size}
+          fill={text.color}
+          textAnchor={text.align === 'center' ? 'middle' : 'start'}
+        >
+          {text.text}
+        </text>
+      ))}
+    </svg>
+  );
+}
+const headerDesigns = headerStyles.map((design) => ({
+  ...design,
+  preview: testHeader(
+    {
+      ...defaults,
+      headerStyle: design.value,
+      school: 'Örnek Anadolu Lisesi',
+      subtitle: 'Matematik · 9. sınıf',
+    },
+    12,
+  ),
+}));
 function PdfPreview({ data }: { data: Uint8Array | null }) {
   const ref = useRef<HTMLDivElement>(null);
   const [error, setError] = useState('');
@@ -309,6 +366,10 @@ export default function Home() {
       return { pages: [], error: errorMessage(e) };
     }
   }, [questions, sources, settings]);
+  const header = useMemo(
+    () => testHeader(settings, questions.length),
+    [settings, questions.length],
+  );
   const remember = () => setUndo(questions);
   const notice = (s: string) => {
     setMessage(s);
@@ -725,7 +786,11 @@ export default function Home() {
     </>
   );
   return (
-    <main onDragOver={(e) => e.preventDefault()} onDrop={fileDrop}>
+    <main
+      className={sources.length ? 'editor-app' : undefined}
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={fileDrop}
+    >
       <input
         ref={input}
         aria-label="Kaynak dosyaları"
@@ -859,8 +924,10 @@ export default function Home() {
         <>
           <div className="projectbar">
             <div>
-              <span className="eyebrow">ÇALIŞMA ALANI</span>
               <h1>Testinizi hazırlayın</h1>
+              <span className="project-caption">
+                Soruları seçin, sayfanızı düzenleyin.
+              </span>
             </div>
             <div className="project-stats">
               <span>
@@ -875,7 +942,10 @@ export default function Home() {
           <section className="editor-grid">
             <aside className="source-panel">
               <div className="panel-heading">
-                <h2>Kaynaklar</h2>
+                <h2>
+                  <FileText size={17} /> Kaynaklar{' '}
+                  <span className="panel-count">{sources.length}</span>
+                </h2>
                 <IconButton
                   label="Kaynak ekle"
                   onClick={() => input.current?.click()}
@@ -908,10 +978,7 @@ export default function Home() {
               {sourceControls}
               <div className="source-tip">
                 <MousePointer2 size={18} />
-                <p>
-                  Soru seçmek için bir kaynağı açın. Seçtiğiniz sorular ana
-                  alanda birikir.
-                </p>
+                <p>Bir kaynağı açın, sorunun etrafını çizerek seçin.</p>
               </div>
             </aside>
             <div className="center-panel">
@@ -1096,64 +1163,15 @@ export default function Home() {
                           className="paper"
                           style={{ aspectRatio: `${PAGE.w}/${PAGE.h}` }}
                         >
-                          <div
-                            className="paper-school"
-                            style={{
-                              left: `${(settings.margin / 210) * 100}%`,
-                            }}
-                          >
-                            {settings.school}
-                          </div>
-                          <div
-                            className="paper-title"
-                            style={{
-                              left: `${(settings.margin / 210) * 100}%`,
-                              right: `${(settings.margin / 210) * 100}%`,
-                            }}
-                          >
-                            {settings.title}
-                          </div>
-                          <div
-                            className="paper-subtitle"
-                            style={{
-                              left: `${(settings.margin / 210) * 100}%`,
-                            }}
-                          >
-                            {settings.subtitle}
-                          </div>
-                          <div
-                            className="paper-rule"
-                            style={{
-                              borderColor: settings.lineColor || undefined,
-                            }}
-                          />
-                          {settings.student && (
-                            <div className="paper-student">
-                              Adı Soyadı:{' '}
-                              <span
-                                style={{
-                                  color: settings.lineColor || undefined,
-                                }}
-                              >
-                                ....................................
-                              </span>{' '}
-                              Sınıf / No:{' '}
-                              <span
-                                style={{
-                                  color: settings.lineColor || undefined,
-                                }}
-                              >
-                                ...........
-                              </span>{' '}
-                              Tarih:{' '}
-                              <span
-                                style={{
-                                  color: settings.lineColor || undefined,
-                                }}
-                              >
-                                ...........
-                              </span>
-                            </div>
+                          {pi === 0 && (
+                            <HeaderGraphic
+                              header={header}
+                              className="paper-header"
+                              style={{
+                                height: `${(header.contentTop / PAGE.h) * 100}%`,
+                              }}
+                              aria-label="Test başlığı ve öğrenci bilgileri"
+                            />
                           )}
                           {columnDividerSegments(p, settings).map(
                             (segment, i) => (
@@ -1224,7 +1242,9 @@ export default function Home() {
             </div>
             <aside className="settings-panel">
               <div className="panel-heading">
-                <h2>Sayfa düzeni</h2>
+                <h2>
+                  <SlidersHorizontal size={17} /> Test ayarları
+                </h2>
                 <span className="a4-chip">A4</span>
               </div>
               <div className="settings-body">
@@ -1285,35 +1305,40 @@ export default function Home() {
                       onChange={(v) => change('student', v)}
                     />
                   </TabsContent>
-                  <TabsContent value="layout" className="settings-tab-panel">
-                    <label className="field">
-                      Sütun sayısı
-                      <Choice
-                        label="Çıktı sütun sayısı"
-                        value={String(settings.columns)}
-                        onChange={(v) => change('columns', +v as 1 | 2)}
-                        options={[
-                          ['2', 'İki sütun'],
-                          ['1', 'Tek sütun'],
-                        ]}
-                      />
-                    </label>
-                    <label className="field">
-                      Sayfa başına soru hedefi
-                      <Choice
-                        label="Sayfa başına soru hedefi"
-                        value={String(settings.perPage)}
-                        onChange={(v) => change('perPage', +v)}
-                        options={[
-                          ['0', 'İçeriğe göre'],
-                          ['2', '2 soru'],
-                          ['4', '4 soru'],
-                          ['6', '6 soru'],
-                          ['8', '8 soru'],
-                          ['10', '10 soru'],
-                        ]}
-                      />
-                    </label>
+                  <TabsContent
+                    value="layout"
+                    className="settings-tab-panel layout-settings"
+                  >
+                    <div className="two-fields">
+                      <label className="field">
+                        Sütun sayısı
+                        <Choice
+                          label="Çıktı sütun sayısı"
+                          value={String(settings.columns)}
+                          onChange={(v) => change('columns', +v as 1 | 2)}
+                          options={[
+                            ['2', 'İki sütun'],
+                            ['1', 'Tek sütun'],
+                          ]}
+                        />
+                      </label>
+                      <label className="field">
+                        Soru / sayfa
+                        <Choice
+                          label="Sayfa başına soru hedefi"
+                          value={String(settings.perPage)}
+                          onChange={(v) => change('perPage', +v)}
+                          options={[
+                            ['0', 'İçeriğe göre'],
+                            ['2', '2 soru'],
+                            ['4', '4 soru'],
+                            ['6', '6 soru'],
+                            ['8', '8 soru'],
+                            ['10', '10 soru'],
+                          ]}
+                        />
+                      </label>
+                    </div>
                     <small className="help-text">
                       Sığmayan soru bölünmeden sonraki sütuna veya sayfaya
                       geçer.
@@ -1354,38 +1379,43 @@ export default function Home() {
                         }
                       />
                     </div>
-                    <label className="field">
-                      Kenar (mm)
-                      <input
-                        aria-label="Kenar boşluğu"
-                        type="number"
-                        min={8}
-                        max={25}
-                        value={settings.margin}
-                        onChange={(e) =>
-                          change(
-                            'margin',
-                            Math.max(8, Math.min(25, +e.target.value)),
-                          )
-                        }
-                      />
-                    </label>
-                    <label className="field">
-                      Aralık (mm)
-                      <input
-                        aria-label="Soru aralığı"
-                        type="number"
-                        min={3}
-                        max={30}
-                        value={settings.gap}
-                        onChange={(e) =>
-                          change(
-                            'gap',
-                            Math.max(3, Math.min(30, +e.target.value)),
-                          )
-                        }
-                      />
-                    </label>
+                    <small className="help-text">
+                      Büyütme sayfa sınırında durur; soruların oranı korunur.
+                    </small>
+                    <div className="two-fields">
+                      <label className="field">
+                        Kenar (mm)
+                        <input
+                          aria-label="Kenar boşluğu"
+                          type="number"
+                          min={8}
+                          max={25}
+                          value={settings.margin}
+                          onChange={(e) =>
+                            change(
+                              'margin',
+                              Math.max(8, Math.min(25, +e.target.value)),
+                            )
+                          }
+                        />
+                      </label>
+                      <label className="field">
+                        Aralık (mm)
+                        <input
+                          aria-label="Soru aralığı"
+                          type="number"
+                          min={3}
+                          max={30}
+                          value={settings.gap}
+                          onChange={(e) =>
+                            change(
+                              'gap',
+                              Math.max(3, Math.min(30, +e.target.value)),
+                            )
+                          }
+                        />
+                      </label>
+                    </div>
                     <Toggle
                       label="Boşlukları dengeli dağıt"
                       checked={settings.balance}
@@ -1393,6 +1423,43 @@ export default function Home() {
                     />
                   </TabsContent>
                   <TabsContent value="style" className="settings-tab-panel">
+                    <fieldset className="header-style-field">
+                      <legend>Başlık tasarımı</legend>
+                      <RadioGroup
+                        className="header-style-picker"
+                        aria-label="Başlık tasarımı"
+                        value={settings.headerStyle || defaults.headerStyle}
+                        onValueChange={(value) =>
+                          change(
+                            'headerStyle',
+                            value as Settings['headerStyle'],
+                          )
+                        }
+                      >
+                        {headerDesigns.map((design) => (
+                          <label
+                            key={design.value}
+                            className="header-style-option"
+                            htmlFor={`header-style-${design.value}`}
+                          >
+                            <HeaderGraphic
+                              header={design.preview}
+                              className="header-style-preview"
+                              viewBox={`0 ${(defaults.margin * 72) / 25.4 - 3} ${PAGE.w} ${design.preview.contentTop - (defaults.margin * 72) / 25.4}`}
+                              aria-hidden="true"
+                            />
+                            <span className="header-style-label">
+                              <RadioGroupItem
+                                id={`header-style-${design.value}`}
+                                value={design.value}
+                                aria-label={`${design.label} başlık`}
+                              />
+                              <span>{design.label}</span>
+                            </span>
+                          </label>
+                        ))}
+                      </RadioGroup>
+                    </fieldset>
                     {settings.columns === 2 && (
                       <Toggle
                         label="Sütunlar arasına çizgi"
@@ -1501,7 +1568,18 @@ export default function Home() {
             Soru sınırlarını çizip cevabını seçin.
           </DialogDescription>
           <div className="crop-topbar">
-            <FileText size={21} className="crop-source-icon" />
+            <div className="crop-heading">
+              <span className="crop-heading-icon">
+                <Scissors size={20} />
+              </span>
+              <div>
+                <strong>
+                  {editing ? 'Soruyu düzenle' : 'Kaynağınızdan soru seçin'}
+                </strong>
+                <span>Seçin · Cevaplayın · Ekleyin</span>
+              </div>
+            </div>
+            <FileText size={18} className="crop-source-icon" />
             <Choice
               label="Soru seçilecek kaynak"
               value={activeId}
@@ -1516,7 +1594,9 @@ export default function Home() {
             >
               <Plus size={16} /> Dosya ekle
             </button>
-            <span className="crop-question-count">{questions.length} soru</span>
+            <span className="crop-question-count">
+              <Check size={14} /> {questions.length} soru
+            </span>
             <DialogClose
               disabled={!!busy}
               render={
@@ -1527,7 +1607,7 @@ export default function Home() {
                 />
               }
             >
-              <Check size={17} /> Bitti
+              <Check size={17} /> Seçimi bitir
             </DialogClose>
           </div>
           <>
@@ -1602,232 +1682,252 @@ export default function Home() {
                 )}
               </div>
             </div>
-            <div className="crop-scroll">
-              {!render ? (
-                <div className="canvas-loading">
-                  <LoaderCircle className="spin" /> Sayfa açılıyor…
-                </div>
-              ) : (
-                <div
-                  className={`source-stage ${selection && selectionReady ? 'has-answer-bar' : ''}`}
-                  ref={sourceStage}
-                  style={{
-                    width: `${zoom}%`,
-                    aspectRatio: `${render.width}/${render.height}`,
-                  }}
-                  onPointerDown={down}
-                  onPointerMove={move}
-                  onPointerUp={up}
-                  onPointerCancel={cancelPointer}
-                  onLostPointerCapture={cancelPointer}
-                >
-                  <div className="canvas-host" ref={attachCanvas} />
-                  {candidates.map((r: Rect, i: number) => (
-                    <button
-                      key={i}
-                      disabled={!!busy}
-                      title={`${i + 1}. olası soruyu seç`}
-                      aria-label={`${i + 1}. olası soruyu seç`}
-                      onPointerDown={(e) => e.stopPropagation()}
-                      onClick={() => confirmSelection(r)}
-                      className="candidate"
-                      style={{
-                        left: `${(r.x / render.width) * 100}%`,
-                        top: `${(r.y / render.height) * 100}%`,
-                        width: `${(r.w / render.width) * 100}%`,
-                        height: `${(r.h / render.height) * 100}%`,
-                      }}
-                    >
-                      <span>{i + 1}</span>
-                    </button>
-                  ))}
-                  {selection && (
-                    <div
-                      className="selection"
-                      style={{
-                        left: `${(selection.x / render.width) * 100}%`,
-                        top: `${(selection.y / render.height) * 100}%`,
-                        width: `${(selection.w / render.width) * 100}%`,
-                        height: `${(selection.h / render.height) * 100}%`,
-                      }}
-                    >
-                      <span>Seçilen alan</span>
-                    </div>
-                  )}
-                  {selection && selectionReady && (
-                    <div
-                      className="selection-answer-bar"
-                      ref={answerBar}
-                      style={{
-                        left: `min(${(selection.x / render.width) * 100}%, max(0px, calc(100% - 292px)))`,
-                        top: `calc(${((selection.y + selection.h) / render.height) * 100}% + 8px)`,
-                      }}
-                      onPointerDown={(e) => e.stopPropagation()}
-                      onPointerMove={(e) => e.stopPropagation()}
-                      onPointerUp={(e) => e.stopPropagation()}
-                    >
-                      <strong>
-                        {editing
-                          ? questions.findIndex((q) => q.id === editing) + 1
-                          : questions.length + 1}
-                        . soru · Doğru cevap
-                      </strong>
-                      <AnswerPicker
-                        value={draftAnswer}
-                        onChange={setDraftAnswer}
-                        disabled={!!busy}
-                      />
+            <div className="crop-workbench">
+              <div className="crop-scroll">
+                {!render ? (
+                  <div className="canvas-loading">
+                    <LoaderCircle className="spin" /> Sayfa açılıyor…
+                  </div>
+                ) : (
+                  <div
+                    className="source-stage"
+                    ref={sourceStage}
+                    style={{
+                      width: `${zoom}%`,
+                      aspectRatio: `${render.width}/${render.height}`,
+                    }}
+                    onPointerDown={down}
+                    onPointerMove={move}
+                    onPointerUp={up}
+                    onPointerCancel={cancelPointer}
+                    onLostPointerCapture={cancelPointer}
+                  >
+                    <div className="canvas-host" ref={attachCanvas} />
+                    {candidates.map((r: Rect, i: number) => (
                       <button
-                        className="primary"
+                        key={i}
                         disabled={!!busy}
-                        onClick={() => void addSelection()}
+                        title={`${i + 1}. olası soruyu seç`}
+                        aria-label={`${i + 1}. olası soruyu seç`}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={() => confirmSelection(r)}
+                        className="candidate"
+                        style={{
+                          left: `${(r.x / render.width) * 100}%`,
+                          top: `${(r.y / render.height) * 100}%`,
+                          width: `${(r.w / render.width) * 100}%`,
+                          height: `${(r.h / render.height) * 100}%`,
+                        }}
                       >
-                        {busy ? (
-                          <LoaderCircle size={16} className="spin" />
-                        ) : (
-                          <Plus size={16} />
-                        )}
-                        {busy
-                          ? 'Ekleniyor…'
-                          : editing
-                            ? 'Soruyu güncelle'
-                            : 'Soruyu teste ekle'}
+                        <span>{i + 1}</span>
                       </button>
-                    </div>
-                  )}
+                    ))}
+                    {selection && (
+                      <div
+                        className="selection"
+                        style={{
+                          left: `${(selection.x / render.width) * 100}%`,
+                          top: `${(selection.y / render.height) * 100}%`,
+                          width: `${(selection.w / render.width) * 100}%`,
+                          height: `${(selection.h / render.height) * 100}%`,
+                        }}
+                      >
+                        <span>Seçilen alan</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+              <aside
+                className="crop-inspector"
+                aria-label="Soru seçimi araçları"
+              >
+                <div className="crop-instruction">
+                  <span className="step-number">01</span>
+                  <h2>Soru alanını seçin</h2>
+                  <p>Belgede sorunun etrafını sürükleyerek çizin.</p>
                 </div>
-              )}
-            </div>
-            <div className="crop-actions">
-              <div>
-                <Toggle
-                  label="Kenarları kırp"
-                  checked={trim}
-                  onChange={setTrim}
-                />
-                <button
-                  className="secondary detect-button"
-                  disabled={!render || !!busy || active?.kind !== 'pdf'}
-                  onClick={detect}
-                >
-                  <ScanLine size={16} /> Sınırları bul
-                </button>
-                <Popover>
-                  <PopoverTrigger
-                    disabled={!!busy}
-                    render={
+                <div className="crop-actions">
+                  <div className="crop-tool-options">
+                    <Toggle
+                      label="Kenarları kırp"
+                      checked={trim}
+                      onChange={setTrim}
+                    />
+                    <button
+                      className="secondary detect-button"
+                      disabled={!render || !!busy || active?.kind !== 'pdf'}
+                      onClick={detect}
+                    >
+                      <ScanLine size={16} /> Sınırları bul
+                    </button>
+                    <Popover>
+                      <PopoverTrigger
+                        disabled={!!busy}
+                        render={
+                          <button
+                            type="button"
+                            className="secondary"
+                            aria-label="Hassas kesim"
+                          />
+                        }
+                      >
+                        <SlidersHorizontal size={16} /> Hassas kesim
+                      </PopoverTrigger>
+                      <PopoverContent
+                        side="top"
+                        align="start"
+                        className="precise-popover"
+                        aria-label="Hassas kesim araçları"
+                      >
+                        <strong>Hassas kesim</strong>
+                        <div className="precise-controls">
+                          <button
+                            className="secondary"
+                            disabled={!render || !!busy}
+                            onClick={() =>
+                              render &&
+                              confirmSelection({
+                                x: 0,
+                                y: 0,
+                                w: render.width,
+                                h: render.height,
+                              })
+                            }
+                          >
+                            Tüm sayfayı seç
+                          </button>
+                          {render &&
+                            selection &&
+                            (['x', 'y', 'w', 'h'] as const).map((key, i) => (
+                              <label key={key}>
+                                {
+                                  [
+                                    'Sol %',
+                                    'Üst %',
+                                    'Genişlik %',
+                                    'Yükseklik %',
+                                  ][i]
+                                }
+                                <input
+                                  type="number"
+                                  disabled={!!busy}
+                                  min={0}
+                                  max={100}
+                                  step={0.1}
+                                  value={
+                                    Math.round(
+                                      (selection[key] /
+                                        (key === 'x' || key === 'w'
+                                          ? render.width
+                                          : render.height)) *
+                                        1000,
+                                    ) / 10
+                                  }
+                                  onChange={(e) => {
+                                    const dimension =
+                                      key === 'x' || key === 'w'
+                                        ? render.width
+                                        : render.height;
+                                    const next = {
+                                      ...selection,
+                                      [key]:
+                                        (Math.max(
+                                          0,
+                                          Math.min(100, +e.target.value),
+                                        ) *
+                                          dimension) /
+                                        100,
+                                    };
+                                    next.x = Math.min(next.x, render.width - 1);
+                                    next.y = Math.min(
+                                      next.y,
+                                      render.height - 1,
+                                    );
+                                    next.w = Math.min(
+                                      next.w,
+                                      render.width - next.x,
+                                    );
+                                    next.h = Math.min(
+                                      next.h,
+                                      render.height - next.y,
+                                    );
+                                    confirmSelection(next);
+                                  }}
+                                />
+                              </label>
+                            ))}
+                        </div>
+                      </PopoverContent>
+                    </Popover>
+                  </div>
+                  <div className="crop-answer-section">
+                    <div className="crop-section-title">
+                      <span className="step-number">02</span>
+                      <h2>Cevabı işaretleyin</h2>
+                    </div>
+                    {selection && selectionReady && (
+                      <div
+                        className="selection-answer-bar"
+                        ref={answerBar}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onPointerMove={(e) => e.stopPropagation()}
+                        onPointerUp={(e) => e.stopPropagation()}
+                      >
+                        <strong>
+                          {editing
+                            ? questions.findIndex((q) => q.id === editing) + 1
+                            : questions.length + 1}
+                          . soru · Doğru cevap
+                        </strong>
+                        <AnswerPicker
+                          value={draftAnswer}
+                          onChange={setDraftAnswer}
+                          disabled={!!busy}
+                        />
+                      </div>
+                    )}
+                    {(!selection || !selectionReady) && (
+                      <p className="answer-placeholder">
+                        Alanı seçtiğinizde cevap seçenekleri burada görünür.
+                      </p>
+                    )}
+                  </div>
+                  <div className="crop-submit-actions">
+                    {selection && (
                       <button
                         type="button"
                         className="secondary"
-                        aria-label="Hassas kesim"
-                      />
-                    }
-                  >
-                    <SlidersHorizontal size={16} /> Hassas kesim
-                  </PopoverTrigger>
-                  <PopoverContent
-                    side="top"
-                    align="start"
-                    className="precise-popover"
-                    aria-label="Hassas kesim araçları"
-                  >
-                    <strong>Hassas kesim</strong>
-                    <div className="precise-controls">
-                      <button
-                        className="secondary"
-                        disabled={!render || !!busy}
-                        onClick={() =>
-                          render &&
-                          confirmSelection({
-                            x: 0,
-                            y: 0,
-                            w: render.width,
-                            h: render.height,
-                          })
-                        }
+                        disabled={!!busy}
+                        onClick={() => {
+                          setSelection(null);
+                          setSelectionReady(false);
+                          if (!editing) setDraftAnswer('');
+                        }}
                       >
-                        Tüm sayfayı seç
+                        <X size={17} /> Seçimi sil
                       </button>
-                      {render &&
-                        selection &&
-                        (['x', 'y', 'w', 'h'] as const).map((key, i) => (
-                          <label key={key}>
-                            {['Sol %', 'Üst %', 'Genişlik %', 'Yükseklik %'][i]}
-                            <input
-                              type="number"
-                              disabled={!!busy}
-                              min={0}
-                              max={100}
-                              step={0.1}
-                              value={
-                                Math.round(
-                                  (selection[key] /
-                                    (key === 'x' || key === 'w'
-                                      ? render.width
-                                      : render.height)) *
-                                    1000,
-                                ) / 10
-                              }
-                              onChange={(e) => {
-                                const dimension =
-                                  key === 'x' || key === 'w'
-                                    ? render.width
-                                    : render.height;
-                                const next = {
-                                  ...selection,
-                                  [key]:
-                                    (Math.max(
-                                      0,
-                                      Math.min(100, +e.target.value),
-                                    ) *
-                                      dimension) /
-                                    100,
-                                };
-                                next.x = Math.min(next.x, render.width - 1);
-                                next.y = Math.min(next.y, render.height - 1);
-                                next.w = Math.min(
-                                  next.w,
-                                  render.width - next.x,
-                                );
-                                next.h = Math.min(
-                                  next.h,
-                                  render.height - next.y,
-                                );
-                                confirmSelection(next);
-                              }}
-                            />
-                          </label>
-                        ))}
-                    </div>
-                  </PopoverContent>
-                </Popover>
-              </div>
-              <div>
-                {selection && (
-                  <button
-                    type="button"
-                    className="secondary"
-                    disabled={!!busy}
-                    onClick={() => {
-                      setSelection(null);
-                      setSelectionReady(false);
-                      if (!editing) setDraftAnswer('');
-                    }}
-                  >
-                    <X size={17} /> Seçimi sil
-                  </button>
-                )}
-                <button
-                  className="primary"
-                  disabled={
-                    !selection || selection.w < 5 || selection.h < 5 || !!busy
-                  }
-                  onClick={() => void addSelection()}
-                >
-                  <Plus size={17} />
-                  {editing ? 'Kırpmayı güncelle' : 'Soruyu ekle'}
-                </button>
-              </div>
+                    )}
+                    <button
+                      className="primary"
+                      disabled={
+                        !selection ||
+                        selection.w < 5 ||
+                        selection.h < 5 ||
+                        !!busy
+                      }
+                      onClick={() => void addSelection()}
+                    >
+                      <Plus size={17} />
+                      {editing ? 'Kırpmayı güncelle' : 'Soruyu ekle'}
+                    </button>
+                  </div>
+                </div>
+                <div className="crop-inspector-note">
+                  <MousePointer2 size={15} />
+                  <span>Ekledikten sonra sıradaki soruyu seçebilirsiniz.</span>
+                </div>
+              </aside>
             </div>
           </>
           {(cropError || error) && (

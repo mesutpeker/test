@@ -36,10 +36,17 @@ export type Question = {
   answer: string;
   wide: boolean;
 };
+export const headerStyles = [
+  { value: 'institutional', label: 'Kurumsal' },
+  { value: 'band', label: 'Şerit' },
+  { value: 'minimal', label: 'Sade' },
+  { value: 'framed', label: 'Çerçeve' },
+] as const;
 export type Settings = {
   title: string;
   subtitle: string;
   school: string;
+  headerStyle: (typeof headerStyles)[number]['value'];
   columns: 1 | 2;
   margin: number;
   gap: number;
@@ -59,6 +66,7 @@ export const defaults: Settings = {
   title: 'Konu değerlendirme testi',
   subtitle: '',
   school: '',
+  headerStyle: 'institutional',
   columns: 2,
   margin: 14,
   gap: 8,
@@ -66,7 +74,7 @@ export const defaults: Settings = {
   perPage: 6,
   balance: true,
   numberColor: '',
-  numberStyle: 'plain',
+  numberStyle: 'bold',
   columnDivider: false,
   lineColor: '',
   student: true,
@@ -75,6 +83,238 @@ export const defaults: Settings = {
   normalization: 'font',
 };
 export const PAGE = { w: 595.2756, h: 841.8898 };
+export function testHeader(settings: Settings, questionCount: number) {
+  const margin = (settings.margin * 72) / 25.4;
+  const width = PAGE.w - margin * 2;
+  const style = settings.headerStyle || 'institutional';
+  const monochrome = style === 'minimal' || style === 'framed';
+  const ink = monochrome ? '#26333e' : '#223a5a';
+  const muted = monochrome ? '#63707b' : '#61738a';
+  const accent = '#294c83';
+  const lineColor = settings.lineColor || (monochrome ? '#9da8b1' : '#bccbde');
+  const texts: {
+    text: string;
+    x: number;
+    y: number;
+    size: number;
+    color: string;
+    align?: 'center';
+  }[] = [];
+  const lines: {
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+    width: number;
+    color: string;
+  }[] = [];
+  const boxes: {
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    color: string;
+  }[] = [];
+  // Conservative advances leave room for DejaVu Sans in both SVG and PDF.
+  // Shared line breaks also keep long titles and unbroken words in the header.
+  function wrapped(text: string, size: number, maxWidth: number) {
+    const advance = (value: string) =>
+      Array.from(value).reduce((sum, char) => {
+        const units = /[WMwm@%]/u.test(char)
+          ? 1.05
+          : /[\s.,:;!'ıilIİ|]/u.test(char)
+            ? 0.36
+            : /[A-ZÇĞÖŞÜ]/u.test(char)
+              ? 0.85
+              : /[a-zçğıöşü0-9\-()/]/u.test(char)
+                ? 0.68
+                : 1.1;
+        return sum + units * size;
+      }, 0);
+    const result: string[] = [];
+    let current = '';
+    for (const word of text.trim().split(/\s+/u).filter(Boolean)) {
+      if (current && advance(`${current} ${word}`) > maxWidth) {
+        result.push(current);
+        current = '';
+      }
+      for (const char of `${current ? ' ' : ''}${word}`) {
+        if (advance(current + char) > maxWidth && current) {
+          result.push(current);
+          current = '';
+        }
+        current += char;
+      }
+    }
+    if (current) result.push(current);
+    return result;
+  }
+  function textBlock(
+    text: string,
+    size: number,
+    color: string,
+    maxWidth = width - 28,
+  ) {
+    for (const row of wrapped(text, size, maxWidth)) {
+      texts.push({
+        text: row,
+        x: PAGE.w / 2,
+        y: cursor + size,
+        size,
+        color,
+        align: 'center',
+      });
+      cursor += size * 1.28;
+    }
+  }
+  function rule(y: number, thickness = 0.6, color = lineColor) {
+    lines.push({
+      x1: margin,
+      y1: y,
+      x2: PAGE.w - margin,
+      y2: y,
+      width: thickness,
+      color,
+    });
+  }
+  // All identity text shares the page's center line. Only the short metadata
+  // row reserves symmetric space for the question count in the right corner.
+  let cursor = margin + 8;
+  const metadataTop = cursor;
+  if (settings.school.trim()) {
+    textBlock(
+      settings.school.toLocaleUpperCase('tr-TR'),
+      8,
+      muted,
+      width - 144,
+    );
+  } else {
+    cursor += 8 * 1.28;
+  }
+  const count = `${questionCount} SORU`;
+  const countSize = Math.min(7, 44 / (count.length * 0.7));
+  if (!monochrome)
+    boxes.push({
+      x: PAGE.w - margin - 62,
+      y: metadataTop - 1,
+      w: 54,
+      h: 14,
+      color: '#edf2fa',
+    });
+  texts.push({
+    text: count,
+    x: PAGE.w - margin - 35,
+    y: metadataTop + 8,
+    size: countSize,
+    color: muted,
+    align: 'center',
+  });
+  cursor += 5;
+  if (style === 'band') {
+    const bandTop = cursor;
+    cursor += 5;
+    textBlock(settings.title || 'Test', 13.5, '#ffffff');
+    cursor += 5;
+    boxes.push({
+      x: margin,
+      y: bandTop,
+      w: width,
+      h: cursor - bandTop,
+      color: accent,
+    });
+  } else {
+    textBlock(settings.title || 'Test', 13.5, ink);
+  }
+  if (settings.subtitle.trim()) {
+    cursor += 3;
+    textBlock(settings.subtitle, 8, muted);
+  }
+  cursor += 8;
+  if (style === 'institutional')
+    rule(margin, 1.8, settings.lineColor || accent);
+  else if (style !== 'minimal') rule(margin);
+  if (settings.student) {
+    const studentTop = cursor;
+    const studentHeight = 24;
+    boxes.push({
+      x: margin,
+      y: studentTop,
+      w: width,
+      h: studentHeight,
+      color: monochrome ? '#ffffff' : '#f5f7fb',
+    });
+    rule(studentTop);
+    const fields = [
+      { label: 'ADI SOYADI', start: 0, end: 0.5, labelWidth: 48 },
+      { label: 'SINIF / NO', start: 0.5, end: 0.75, labelWidth: 46 },
+      { label: 'TARİH', start: 0.75, end: 1, labelWidth: 30 },
+    ];
+    for (const field of fields) {
+      const x = margin + width * field.start;
+      texts.push({
+        text: field.label,
+        x: x + 8,
+        y: studentTop + 15,
+        size: 7,
+        color: muted,
+      });
+      lines.push({
+        x1: x + 8 + field.labelWidth,
+        y1: studentTop + 17,
+        x2: margin + width * field.end - 10,
+        y2: studentTop + 17,
+        width: 0.45,
+        color: lineColor,
+      });
+      if (field.start && style !== 'minimal')
+        lines.push({
+          x1: x,
+          y1: studentTop,
+          x2: x,
+          y2: studentTop + studentHeight,
+          width: 0.45,
+          color: lineColor,
+        });
+    }
+    cursor += studentHeight;
+  }
+  rule(cursor, style === 'minimal' ? 0.8 : 0.6);
+  if (style !== 'minimal') {
+    for (const x of [margin, PAGE.w - margin]) {
+      lines.push({
+        x1: x,
+        y1: margin,
+        x2: x,
+        y2: cursor,
+        width: 0.6,
+        color: lineColor,
+      });
+    }
+  }
+  if (style === 'framed') {
+    for (const y of [margin + 3, cursor - 3]) {
+      lines.push({
+        x1: margin + 3,
+        y1: y,
+        x2: PAGE.w - margin - 3,
+        y2: y,
+        width: 0.35,
+        color: lineColor,
+      });
+    }
+    for (const x of [margin + 3, PAGE.w - margin - 3]) {
+      lines.push({
+        x1: x,
+        y1: margin + 3,
+        x2: x,
+        y2: cursor - 3,
+        width: 0.35,
+        color: lineColor,
+      });
+    }
+  }
+  return { texts, lines, boxes, contentTop: cursor + 12 };
+}
 export type Placement = {
   q: Question;
   index: number;
@@ -84,7 +324,7 @@ export type Placement = {
   h: number;
   scale: number;
 };
-export type LayoutPage = { items: Placement[] };
+export type LayoutPage = { items: Placement[]; contentTop: number };
 export function columnDividerSegments(page: LayoutPage, settings: Settings) {
   if (
     !settings.columnDivider ||
@@ -93,7 +333,7 @@ export function columnDividerSegments(page: LayoutPage, settings: Settings) {
   )
     return [];
   const bottom = PAGE.h - (settings.margin * 72) / 25.4 - 22;
-  let top = settings.student ? 116 : 89;
+  let top = page.contentTop;
   const segments: { top: number; bottom: number }[] = [];
   for (const item of page.items
     .filter((i) => i.q.wide)
@@ -115,9 +355,8 @@ export function layoutQuestions(
   const colWidth = (PAGE.w - margin * 2 - gutter) / settings.columns;
   const numberGutter = 17;
   const contentWidth = colWidth - numberGutter;
-  const top = settings.student ? 116 : 89;
+  const firstTop = testHeader(settings, questions.length).contentTop;
   const bottom = PAGE.h - margin - 22;
-  const available = bottom - top;
   const baseGap = (settings.gap * 72) / 25.4;
   const nominalScale = (q: Question) => {
     const src = sources.find((s) => s.id === q.sourceId);
@@ -134,35 +373,50 @@ export function layoutQuestions(
       100
     );
   };
-  const fitFactor = Math.min(
-    1,
+  const widthLimit = Math.min(
+    Infinity,
     ...questions.map(
       (q) =>
         (q.wide ? PAGE.w - margin * 2 - numberGutter : contentWidth) /
         (q.rect.w * nominalScale(q)),
     ),
   );
+  const heightLimit = Math.min(
+    Infinity,
+    ...questions.map(
+      (q, index) =>
+        (bottom - (index === 0 ? firstTop : margin)) /
+        (q.rect.h * nominalScale(q)),
+    ),
+  );
+  // Apply the user's size to the common baseline, then cap the entire set
+  // together. A single full-width crop must not invalidate every A4 page.
+  const commonScale = Math.min(
+    (Math.min(1, widthLimit) * settings.scale) / 100,
+    widthLimit,
+    heightLimit,
+  );
   const pages: LayoutPage[] = [];
-  let current: LayoutPage = { items: [] };
+  let current: LayoutPage = { items: [], contentTop: firstTop };
   let col = 0;
-  let cursor = top;
+  let cursor = firstTop;
   let count = 0;
-  let bandTop = top;
+  let bandTop = firstTop;
   const maxPerCol = settings.perPage
     ? Math.ceil(settings.perPage / settings.columns)
     : Infinity;
   const flush = () => {
     if (current.items.length) pages.push(current);
-    current = { items: [] };
+    current = { items: [], contentTop: pages.length ? margin : firstTop };
     col = 0;
-    cursor = top;
+    cursor = current.contentTop;
     count = 0;
-    bandTop = top;
+    bandTop = current.contentTop;
   };
   questions.forEach((q, index) => {
     const source = sources.find((s) => s.id === q.sourceId);
     if (!source) throw new Error('Bir sorunun kaynak dosyası bulunamadı.');
-    const scale = (nominalScale(q) * fitFactor * settings.scale) / 100;
+    const scale = nominalScale(q) * commonScale;
     const w = q.rect.w * scale,
       h = q.rect.h * scale;
     const maxWidth = q.wide ? PAGE.w - margin * 2 - numberGutter : contentWidth;
@@ -170,7 +424,7 @@ export function layoutQuestions(
       throw new Error(
         `${index + 1}. soru sütundan geniş. Soruyu tam genişliğe alın veya ortak soru boyutunu küçültün.`,
       );
-    if (h > available + 1)
+    if (h > bottom - margin + 1)
       throw new Error(
         `${index + 1}. soru bir sayfadan uzun. Ortak soru boyutunu küçültün veya seçimi daraltın.`,
       );
@@ -180,12 +434,12 @@ export function layoutQuestions(
         q,
         index,
         x: margin + numberGutter,
-        y: top,
+        y: current.contentTop,
         w,
         h,
         scale,
       });
-      bandTop = top + h + baseGap;
+      bandTop = current.contentTop + h + baseGap;
       cursor = bandTop;
       count = 0;
       return;
@@ -854,20 +1108,38 @@ export async function createPdf(
   }
   for (let pi = 0; pi < pages.length; pi++) {
     const page = doc.addPage([PAGE.w, PAGE.h]);
-    fitted(page, settings.school, margin, 30, 9, PAGE.w - 2 * margin);
-    fitted(page, settings.title || 'Test', margin, 54, 18, PAGE.w - 2 * margin);
-    fitted(page, settings.subtitle, margin, 73, 9, PAGE.w - 2 * margin);
-    line(page, 84);
-    if (settings.student) {
-      fitted(
-        page,
-        'Adı Soyadı: ........................................   Sınıf / No: ...................   Tarih: .................',
-        margin,
-        102,
-        8,
-        PAGE.w - 2 * margin,
-        true,
-      );
+    if (pi === 0) {
+      const header = testHeader(settings, questions.length);
+      for (const box of header.boxes) {
+        page.drawRectangle({
+          x: box.x,
+          y: PAGE.h - box.y - box.h,
+          width: box.w,
+          height: box.h,
+          color: hexColor(box.color, ink),
+        });
+      }
+      for (const rule of header.lines) {
+        page.drawLine({
+          start: { x: rule.x1, y: PAGE.h - rule.y1 },
+          end: { x: rule.x2, y: PAGE.h - rule.y2 },
+          thickness: rule.width,
+          color: hexColor(rule.color, lineInk),
+        });
+      }
+      for (const text of header.texts) {
+        page.drawText(text.text, {
+          x:
+            text.x -
+            (text.align === 'center'
+              ? font.widthOfTextAtSize(text.text, text.size) / 2
+              : 0),
+          y: PAGE.h - text.y,
+          font,
+          size: text.size,
+          color: hexColor(text.color, ink),
+        });
+      }
     }
     for (const segment of columnDividerSegments(pages[pi], settings)) {
       page.drawLine({
