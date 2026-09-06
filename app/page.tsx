@@ -1,10 +1,18 @@
-/* oxlint-disable react/react-compiler, next/no-img-element, jsx-a11y/no-noninteractive-element-interactions */
+/* oxlint-disable react/react-compiler, next/no-img-element, jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */
+// The crop canvas uses role=application for direct arrow-key manipulation.
 // Local canvas previews use data URLs; pointer crop and drag actions have button alternatives.
 'use client';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
+import { LayoutEditor } from '@/components/layout-editor';
+import {
+  QuestionOptions,
+  QuestionQuality,
+} from '@/components/question-options';
+import { transformCrop, type CropHandle } from '@/lib/editor-geometry';
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   FilePlus2,
+  House,
   ScanLine,
   ArrowRight,
   FileText,
@@ -13,6 +21,7 @@ import {
   Download,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Scissors,
   ZoomIn,
   ZoomOut,
@@ -53,6 +62,7 @@ import {
   Popover,
   PopoverTrigger,
   PopoverContent,
+  PopoverTitle,
 } from '@/components/ui/popover';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import {
@@ -63,7 +73,10 @@ import {
   makeQuestion,
   detectQuestions,
   layoutQuestions,
-  columnDividerSegments,
+  printedFontSize,
+  movePlacedQuestion,
+  adjustQuestionsForHeader,
+  removeEmptyLayoutPage,
   testHeader,
   headerStyles,
   createPdf,
@@ -336,6 +349,7 @@ export default function Home() {
     [render, setRender] = useState<RenderedSource | null>(null),
     [selection, setSelection] = useState<Rect | null>(null),
     [cropOpen, setCropOpen] = useState(false),
+    [showHome, setShowHome] = useState(false),
     [selectionReady, setSelectionReady] = useState(false),
     [draftAnswer, setDraftAnswer] = useState(''),
     [cropError, setCropError] = useState(''),
@@ -347,15 +361,61 @@ export default function Home() {
     [progress, setProgress] = useState(0),
     [undo, setUndo] = useState<Question[] | null>(null);
   const input = useRef<HTMLInputElement>(null),
+    resumeButton = useRef<HTMLButtonElement>(null),
+    homeButton = useRef<HTMLButtonElement>(null),
     sourceStage = useRef<HTMLDivElement>(null),
-    answerBar = useRef<HTMLDivElement>(null),
+    selectionFrame = useRef<HTMLDivElement>(null),
     pendingEdit = useRef<Question | null>(null),
-    pointer = useRef<{ id: number; x: number; y: number } | null>(null),
+    selectedCandidate = useRef<Rect | null>(null),
+    pointer = useRef<{
+      id: number;
+      x: number;
+      y: number;
+      rect?: Rect;
+      handle?: CropHandle;
+    } | null>(null),
     addingQuestion = useRef(false),
     dragged = useRef<number | null>(null);
   const active = sources.find((s) => s.id === activeId);
-  const change = <K extends keyof Settings>(k: K, v: Settings[K]) =>
-    setSettings((s) => ({ ...s, [k]: v }));
+  const change = <K extends keyof Settings>(k: K, v: Settings[K]) => {
+    const next = { ...settings, [k]: v };
+    if (['headerStyle', 'title', 'subtitle', 'school', 'student'].includes(k)) {
+      try {
+        const adjusted = adjustQuestionsForHeader(
+          questions,
+          sources,
+          settings,
+          next,
+        );
+        if (adjusted !== questions) {
+          let adjustedUndo = undo;
+          if (undo) {
+            try {
+              adjustedUndo = adjustQuestionsForHeader(
+                undo,
+                sources,
+                settings,
+                next,
+              );
+            } catch {
+              adjustedUndo = null;
+            }
+          }
+          setQuestions(adjusted);
+          setUndo(adjustedUndo);
+          if (adjusted.some((q, i) => questions[i].position && !q.position))
+            notice(
+              'Yeni başlığa yer açmak için sığmayan sorular otomatik yerleştirildi.',
+            );
+        }
+        setError('');
+      } catch (e) {
+        setError(errorMessage(e));
+        return;
+      }
+    }
+    setSettings(next);
+  };
   const layout = useMemo(() => {
     try {
       return {
@@ -376,6 +436,9 @@ export default function Home() {
     setTimeout(() => setMessage(''), 4500);
   };
   useEffect(() => {
+    if (showHome) resumeButton.current?.focus();
+  }, [showHome]);
+  useEffect(() => {
     if (!questions.length) return;
     const handler = (e: BeforeUnloadEvent) => {
       e.preventDefault();
@@ -393,6 +456,7 @@ export default function Home() {
     setSelectionReady(false);
     setRender(null);
     setCandidates([]);
+    selectedCandidate.current = null;
     setSelection(null);
     setError('');
     setCropError('');
@@ -430,13 +494,6 @@ export default function Home() {
     [render],
   );
   useEffect(() => {
-    if (selectionReady)
-      answerBar.current?.scrollIntoView({
-        block: 'nearest',
-        inline: 'nearest',
-      });
-  }, [selectionReady, selection]);
-  useEffect(() => {
     const paste = (e: ClipboardEvent) => {
       const files = Array.from(e.clipboardData?.files || []);
       if (files.length) {
@@ -461,6 +518,7 @@ export default function Home() {
       }
     }
     if (added.length) {
+      setShowHome(false);
       setSources((s) => [...s, ...added]);
       setActiveId(added[0].id);
       setEditing(null);
@@ -502,6 +560,7 @@ export default function Home() {
       setPage(1);
       setQuestions((q) => [...q, ...qs]);
       setSettings((s) => ({ ...s, columns: 1, perPage: 4 }));
+      setShowHome(false);
       notice('Özgün örnek belge eklendi.');
     } catch (e: unknown) {
       setError(errorMessage(e));
@@ -511,6 +570,7 @@ export default function Home() {
   }
   const selectSource = (id: string) => {
     if (busy) return;
+    setShowHome(false);
     pendingEdit.current = null;
     setActiveId(id);
     setPage(1);
@@ -530,6 +590,15 @@ export default function Home() {
     setDraftAnswer('');
     setCropError('');
     setCropOpen(open);
+  }
+  function returnHome() {
+    if (busy || addingQuestion.current) return;
+    changeCropOpen(false);
+    setShowHome(true);
+  }
+  function resumeTest() {
+    setShowHome(false);
+    requestAnimationFrame(() => homeButton.current?.focus());
   }
   function changePage(next: number) {
     if (busy) return;
@@ -580,18 +649,44 @@ export default function Home() {
     e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
     pointer.current = { id: e.pointerId, ...point(e) };
+    selectedCandidate.current = null;
     setSelection(null);
     setSelectionReady(false);
   }
   function move(e: React.PointerEvent) {
     if (!pointer.current || pointer.current.id !== e.pointerId || !render)
       return;
-    setSelection(selectionRect(pointer.current, point(e)));
+    const start = pointer.current,
+      at = point(e);
+    setSelection(
+      start.rect && start.handle
+        ? transformCrop(
+            start.rect,
+            at.x - start.x,
+            at.y - start.y,
+            start.handle,
+            render.width,
+            render.height,
+          )
+        : selectionRect(start, at),
+    );
   }
   function up(e: React.PointerEvent) {
     const start = pointer.current;
     if (!start || start.id !== e.pointerId) return;
-    const rect = selectionRect(start, point(e));
+    if (!render) return;
+    const at = point(e);
+    const rect =
+      start.rect && start.handle
+        ? transformCrop(
+            start.rect,
+            at.x - start.x,
+            at.y - start.y,
+            start.handle,
+            render.width,
+            render.height,
+          )
+        : selectionRect(start, at);
     pointer.current = null;
     if (e.currentTarget.hasPointerCapture(e.pointerId))
       e.currentTarget.releasePointerCapture(e.pointerId);
@@ -600,17 +695,44 @@ export default function Home() {
       return;
     }
     confirmSelection(rect);
+    requestAnimationFrame(() =>
+      selectionFrame.current?.focus({ preventScroll: true }),
+    );
   }
   function cancelPointer() {
     if (!pointer.current) return;
+    const old = pointer.current.rect;
     pointer.current = null;
-    setSelection(null);
+    setSelection(old || null);
+  }
+  function transformStart(e: React.PointerEvent, handle: CropHandle) {
+    e.stopPropagation();
+    if (!selection || !render || busy || e.button !== 0 || !e.isPrimary) return;
+    e.preventDefault();
+    pointer.current = { id: e.pointerId, ...point(e), rect: selection, handle };
+    sourceStage.current?.setPointerCapture(e.pointerId);
+  }
+  function cropKeyboard(e: React.KeyboardEvent, handle: CropHandle = 'move') {
+    if (!selection || !render || busy) return;
+    if (e.currentTarget !== e.target) return;
+    const step = e.shiftKey ? 10 : 1;
+    const dx =
+      e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
+    const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
+    if (dx || dy) {
+      e.preventDefault();
+      e.stopPropagation();
+      confirmSelection(
+        transformCrop(selection, dx, dy, handle, render.width, render.height),
+      );
+    }
   }
   async function addSelection() {
     if (
       !selection ||
       !active ||
       !render ||
+      busy ||
       selection.w < 5 ||
       selection.h < 5 ||
       addingQuestion.current
@@ -629,9 +751,11 @@ export default function Home() {
           prev.map((old) =>
             old.id === editing
               ? {
+                  ...old,
                   ...q,
                   id: old.id,
                   wide: old.wide,
+                  position: undefined,
                 }
               : old,
           ),
@@ -645,6 +769,12 @@ export default function Home() {
       setSelection(null);
       setSelectionReady(false);
       setDraftAnswer('');
+      const addedCandidate = selectedCandidate.current;
+      if (addedCandidate)
+        setCandidates((previous) =>
+          previous.filter((r) => r !== addedCandidate),
+        );
+      selectedCandidate.current = null;
     } catch (e: unknown) {
       setCropError(errorMessage(e));
       setError(errorMessage(e));
@@ -654,14 +784,18 @@ export default function Home() {
     }
   }
   async function detect() {
-    if (!render || !active) return;
-    setBusy('Soru sınırları aranıyor…');
+    if (!render || !active || busy || addingQuestion.current) return;
+    setCropError('');
+    setError('');
+    setCandidates([]);
+    selectedCandidate.current = null;
+    setBusy('Sorular otomatik bulunuyor…');
     try {
       const rects = await detectQuestions(render, active.columns);
       setCandidates(rects);
       notice(
         rects.length
-          ? `${rects.length} olası soru bulundu. Eklemek için bir çerçeve seçin.`
+          ? `${rects.length} olası soru bulundu. Tek tek seçebilir veya tümünü ekleyebilirsiniz.`
           : 'Numaralı soru sınırı bulunamadı. Sorunun etrafında sürükleyerek seçin.',
       );
     } catch {
@@ -670,10 +804,134 @@ export default function Home() {
       setBusy('');
     }
   }
+  async function addDetectedQuestions() {
+    if (
+      !active ||
+      !render ||
+      !candidates.length ||
+      busy ||
+      addingQuestion.current
+    )
+      return;
+    addingQuestion.current = true;
+    setCropError('');
+    setError('');
+    const added: Question[] = [];
+    try {
+      for (const [index, rect] of candidates.entries()) {
+        setBusy(`Sorular ekleniyor… ${index + 1}/${candidates.length}`);
+        const selected = rect === selectedCandidate.current && selection;
+        const question = await makeQuestion(
+          active,
+          page,
+          selected || rect,
+          render,
+          trim,
+        );
+        if (selected) question.answer = draftAnswer;
+        const duplicate = [...questions, ...added].some(
+          (q) =>
+            q.sourceId === question.sourceId &&
+            q.page === question.page &&
+            q.rotation === question.rotation &&
+            (['x', 'y', 'w', 'h'] as const).every(
+              (key) => Math.abs(q.rect[key] - question.rect[key]) < 1,
+            ),
+        );
+        if (!duplicate) added.push(question);
+      }
+      if (added.length) {
+        remember();
+        setQuestions((previous) => [...previous, ...added]);
+      }
+      setCandidates([]);
+      selectedCandidate.current = null;
+      setSelection(null);
+      setSelectionReady(false);
+      setEditing(null);
+      setDraftAnswer('');
+      notice(
+        added.length
+          ? `${added.length} soru eklendi.${candidates.length > added.length ? ' Daha önce eklenen sorular atlandı.' : ''}`
+          : 'Bulunan sorular zaten testte; tekrar eklenmedi.',
+      );
+    } catch (e) {
+      setCropError(errorMessage(e));
+      setError(errorMessage(e));
+    } finally {
+      addingQuestion.current = false;
+      setBusy('');
+    }
+  }
+  const placements = layout.pages.flatMap((p) => p.items);
+  const smallQuestions = placements.filter((it) => {
+    const size = printedFontSize(it);
+    return size !== null && size < settings.minFontSize;
+  });
   function updateQuestion(id: string, update: Partial<Question>) {
-    setQuestions((q) =>
-      q.map((it) => (it.id === id ? { ...it, ...update } : it)),
+    const next = questions.map((it) =>
+      it.id === id ? { ...it, ...update } : it,
     );
+    try {
+      layoutQuestions(next, sources, settings);
+    } catch (e) {
+      setError(errorMessage(e));
+      return;
+    }
+    remember();
+    setQuestions(next);
+    setError('');
+  }
+  function moveQuestion(id: string, pageIndex: number, x: number, y: number) {
+    // Freeze the visible layout so dropping into a gap never moves other questions.
+    const next = movePlacedQuestion(questions, layout.pages, id, {
+      page: pageIndex,
+      x,
+      y,
+    });
+    try {
+      layoutQuestions(next, sources, settings);
+    } catch (e) {
+      setError(errorMessage(e));
+      return false;
+    }
+    remember();
+    setQuestions(next);
+    setError('');
+    notice(`Soru ${pageIndex + 1}. sayfaya yerleştirildi.`);
+    return true;
+  }
+  function resetPlacement() {
+    remember();
+    setQuestions((qs) => qs.map((q) => ({ ...q, position: undefined })));
+    setError('');
+    notice('Sorular otomatik yerleşime alındı.');
+  }
+  function removeEmptyPage(pageIndex: number) {
+    try {
+      const next = removeEmptyLayoutPage(
+        questions,
+        sources,
+        settings,
+        layout.pages,
+        pageIndex,
+      );
+      if (next === questions) return;
+      layoutQuestions(next, sources, settings);
+      remember();
+      setQuestions(next);
+      setError('');
+      notice('Boş sayfa silindi.');
+    } catch (e) {
+      setError(errorMessage(e));
+    }
+  }
+  function undoQuestions() {
+    if (undo) {
+      setQuestions(undo);
+      setUndo(null);
+      setError('');
+    }
   }
   function reorder(from: number, to: number) {
     if (to < 0 || to >= questions.length) return;
@@ -693,13 +951,14 @@ export default function Home() {
         source.kind === 'pdf'
           ? (q.rotation - (await source.pdf!.getPage(q.page)).rotate + 360) %
             360
-          : 0;
+          : q.rotation;
       pendingEdit.current = q;
       setActiveId(q.sourceId);
       setPage(q.page);
       setRotation(angle);
       setEditing(q.id);
       setDraftAnswer(q.answer);
+      setShowHome(false);
       setCropOpen(true);
     } catch (e) {
       setError(errorMessage(e));
@@ -787,7 +1046,11 @@ export default function Home() {
   );
   return (
     <main
-      className={sources.length ? 'editor-app' : undefined}
+      className={
+        sources.length && !showHome
+          ? `editor-app ${tab === 'layout' ? 'preview-active' : ''}`
+          : undefined
+      }
       onDragOver={(e) => e.preventDefault()}
       onDrop={fileDrop}
     >
@@ -804,17 +1067,35 @@ export default function Home() {
         }}
       />
       <header className="topbar">
-        <div className="brand">
+        <button
+          type="button"
+          className="brand"
+          aria-label="Test Atölyesi — Ana sayfaya dön"
+          disabled={!!busy}
+          onClick={returnHome}
+        >
           <span className="brandmark">
             <ScanLine />
           </span>
           Test Atölyesi
-        </div>
+        </button>
         <span className="quiet">
           <ShieldCheck size={16} /> Dosyalarınız cihazınızda kalır
         </span>
         <div className="header-actions">
-          {questions.length > 0 && (
+          {sources.length > 0 && !showHome && (
+            <button
+              ref={homeButton}
+              type="button"
+              className="secondary home-button"
+              aria-label="Ana sayfaya dön"
+              disabled={!!busy}
+              onClick={returnHome}
+            >
+              <House size={17} /> Ana sayfa
+            </button>
+          )}
+          {questions.length > 0 && !showHome && (
             <>
               <button
                 className="secondary"
@@ -856,7 +1137,7 @@ export default function Home() {
         </output>
       )}
 
-      {!sources.length ? (
+      {(!sources.length || showHome) && (
         <>
           <div className="workspace-heading">
             <div>
@@ -879,24 +1160,47 @@ export default function Home() {
               <div className="upload-icon">
                 <FilePlus2 size={32} />
               </div>
-              <h2>İlk kaynağınızı ekleyin</h2>
-              <p>PDF veya görsellerinizi buraya sürükleyin.</p>
+              <h2>
+                {sources.length
+                  ? 'Testinize devam edin'
+                  : 'İlk kaynağınızı ekleyin'}
+              </h2>
+              <p>
+                {sources.length
+                  ? `${sources.length} kaynak · ${questions.length} soru · Test ayarlarınız korunuyor.`
+                  : 'PDF veya görsellerinizi buraya sürükleyin.'}
+              </p>
+              {sources.length > 0 && (
+                <button
+                  ref={resumeButton}
+                  type="button"
+                  className="primary"
+                  disabled={!!busy}
+                  onClick={resumeTest}
+                >
+                  <ArrowRight size={17} /> Teste devam et
+                </button>
+              )}
               <button
-                className="primary"
+                className={
+                  sources.length ? 'secondary resume-add-source' : 'primary'
+                }
                 onClick={() => input.current?.click()}
                 disabled={!!busy}
               >
                 <Plus size={17} />
-                Dosya seç
+                {sources.length ? 'Kaynak ekle' : 'Dosya seç'}
               </button>
               <small>PDF, PNG, JPG, WebP · Dosya başına 100 MB</small>
-              <button
-                className="text-btn demo"
-                onClick={demo}
-                disabled={!!busy}
-              >
-                Örnek belgeyle dene <ArrowRight size={15} />
-              </button>
+              {!sources.length && (
+                <button
+                  className="text-btn demo"
+                  onClick={demo}
+                  disabled={!!busy}
+                >
+                  Örnek belgeyle dene <ArrowRight size={15} />
+                </button>
+              )}
             </div>
             <aside className="intro-note">
               <FileText size={26} />
@@ -920,14 +1224,76 @@ export default function Home() {
             tarayıcıda yapılır.
           </div>
         </>
-      ) : (
-        <>
+      )}
+      {sources.length > 0 && (
+        <div className="editor-content" hidden={showHome}>
           <div className="projectbar">
-            <div>
+            <div className="project-summary">
               <h1>Testinizi hazırlayın</h1>
               <span className="project-caption">
                 Soruları seçin, sayfanızı düzenleyin.
               </span>
+            </div>
+            <div className="project-sources">
+              <Popover>
+                <PopoverTrigger
+                  render={
+                    <button
+                      className="source-picker-trigger"
+                      aria-label={`Kaynaklar (${sources.length}): ${active?.name || 'Kaynak seç'}`}
+                    />
+                  }
+                >
+                  <FileText size={18} />
+                  <span className="source-picker-text">
+                    <strong>
+                      Kaynaklar{' '}
+                      <span className="panel-count">{sources.length}</span>
+                    </strong>
+                    <span title={active?.name}>
+                      {active?.name || 'Kaynak seç'}
+                    </span>
+                  </span>
+                  <ChevronDown size={16} />
+                </PopoverTrigger>
+                <PopoverContent className="source-picker-popover" align="end">
+                  <div className="panel-heading">
+                    <PopoverTitle>Kaynaklar</PopoverTitle>
+                    <IconButton
+                      label="Kaynak ekle"
+                      disabled={!!busy}
+                      onClick={() => input.current?.click()}
+                    >
+                      <Plus size={18} />
+                    </IconButton>
+                  </div>
+                  <div className="source-list">
+                    {sources.map((s) => (
+                      <button
+                        key={s.id}
+                        className={`source-item ${s.id === activeId ? 'active' : ''}`}
+                        aria-pressed={s.id === activeId}
+                        onClick={() => selectSource(s.id)}
+                      >
+                        {s.kind === 'pdf' ? (
+                          <FileText size={20} />
+                        ) : (
+                          <ImageIcon size={20} />
+                        )}
+                        <span>
+                          <strong>{s.name}</strong>
+                          <small>
+                            {s.pages} sayfa ·{' '}
+                            {s.kind === 'pdf' ? 'PDF' : 'Görsel'}
+                          </small>
+                        </span>
+                        {s.id === activeId && <span className="active-dot" />}
+                      </button>
+                    ))}
+                  </div>
+                  {sourceControls}
+                </PopoverContent>
+              </Popover>
             </div>
             <div className="project-stats">
               <span>
@@ -940,47 +1306,6 @@ export default function Home() {
             </div>
           </div>
           <section className="editor-grid">
-            <aside className="source-panel">
-              <div className="panel-heading">
-                <h2>
-                  <FileText size={17} /> Kaynaklar{' '}
-                  <span className="panel-count">{sources.length}</span>
-                </h2>
-                <IconButton
-                  label="Kaynak ekle"
-                  onClick={() => input.current?.click()}
-                >
-                  <Plus size={18} />
-                </IconButton>
-              </div>
-              <div className="source-list">
-                {sources.map((s) => (
-                  <button
-                    key={s.id}
-                    className={`source-item ${s.id === activeId ? 'active' : ''}`}
-                    onClick={() => selectSource(s.id)}
-                  >
-                    {s.kind === 'pdf' ? (
-                      <FileText size={20} />
-                    ) : (
-                      <ImageIcon size={20} />
-                    )}
-                    <span>
-                      <strong>{s.name}</strong>
-                      <small>
-                        {s.pages} sayfa · {s.kind === 'pdf' ? 'PDF' : 'Görsel'}
-                      </small>
-                    </span>
-                    {s.id === activeId && <span className="active-dot" />}
-                  </button>
-                ))}
-              </div>
-              {sourceControls}
-              <div className="source-tip">
-                <MousePointer2 size={18} />
-                <p>Bir kaynağı açın, sorunun etrafını çizerek seçin.</p>
-              </div>
-            </aside>
             <div className="center-panel">
               <div className="stage-header">
                 <Tabs value={tab} onValueChange={(v) => setTab(String(v))}>
@@ -989,7 +1314,7 @@ export default function Home() {
                       <FileText size={15} /> Seçilen sorular
                     </TabsTrigger>
                     <TabsTrigger value="layout">
-                      <LayoutTemplate size={15} /> A4 yerleşimi
+                      <LayoutTemplate size={15} /> A4 Önizleme
                     </TabsTrigger>
                   </TabsList>
                 </Tabs>
@@ -1001,6 +1326,53 @@ export default function Home() {
                   <Plus size={17} /> Soru seç
                 </button>
               </div>
+              {smallQuestions.length > 0 && (
+                <details
+                  key={tab}
+                  className="readability-warning"
+                  open={tab === 'questions'}
+                >
+                  <summary>
+                    {smallQuestions.length} soruda yazı {settings.minFontSize}{' '}
+                    pt sınırının altında.
+                  </summary>
+                  <span>
+                    Tam genişlik, ayrı sayfa veya soruya özel boyut
+                    seçebilirsiniz.
+                  </span>
+                  <div>
+                    {smallQuestions.map((it) => (
+                      <Popover key={it.q.id}>
+                        <PopoverTrigger
+                          render={
+                            <button
+                              className="warning-question"
+                              aria-label={`${it.index + 1}. sorunun küçük yazı uyarısını düzenle`}
+                            />
+                          }
+                        >
+                          {it.index + 1}. soru · ≈
+                          {printedFontSize(it)!.toLocaleString('tr-TR', {
+                            maximumFractionDigits: 1,
+                          })}{' '}
+                          pt
+                        </PopoverTrigger>
+                        <PopoverContent className="question-options-popover">
+                          <QuestionOptions
+                            question={it.q}
+                            index={it.index}
+                            item={it}
+                            settings={settings}
+                            onChange={(update) =>
+                              updateQuestion(it.q.id, update)
+                            }
+                          />
+                        </PopoverContent>
+                      </Popover>
+                    ))}
+                  </div>
+                </details>
+              )}
               {tab === 'questions' ? (
                 <div className="question-tray question-workspace">
                   <div className="tray-heading">
@@ -1009,14 +1381,9 @@ export default function Home() {
                     </h2>
                     <span className="quiet">Sürükleyerek sıralayın</span>
                     <IconButton
-                      label="Son silme veya sıralamayı geri al"
+                      label="Son soru düzenlemesini geri al"
                       disabled={!undo}
-                      onClick={() => {
-                        if (undo) {
-                          setQuestions(undo);
-                          setUndo(null);
-                        }
-                      }}
+                      onClick={undoQuestions}
                     >
                       <Undo2 size={17} />
                     </IconButton>
@@ -1080,12 +1447,20 @@ export default function Home() {
                               <ArrowDown size={14} />
                             </IconButton>
                             <button
-                              className={`width-toggle ${q.wide ? 'on' : ''}`}
+                              className={`width-toggle ${q.wide || q.ownPage ? 'on' : ''}`}
+                              disabled={q.ownPage}
                               onClick={() =>
-                                updateQuestion(q.id, { wide: !q.wide })
+                                updateQuestion(q.id, {
+                                  wide: !q.wide,
+                                  position: undefined,
+                                })
                               }
                             >
-                              {q.wide ? 'Tam genişlik' : 'Tek sütun'}
+                              {q.ownPage
+                                ? 'Ayrı sayfa'
+                                : q.wide
+                                  ? 'Tam genişlik'
+                                  : 'Tek sütun'}
                             </button>
                           </div>
                           <Choice
@@ -1104,21 +1479,33 @@ export default function Home() {
                             ]}
                           />
 
-                          <small className="q-quality">
-                            {q.fontSize
-                              ? `${q.fontSize} pt · Özgün PDF`
-                              : sources.find((s) => s.id === q.sourceId)
-                                    ?.kind === 'pdf'
-                                ? 'Özgün PDF'
-                                : (() => {
-                                    const placement = layout.pages
-                                      .flatMap((p) => p.items)
-                                      .find((i) => i.q.id === q.id);
-                                    return placement
-                                      ? `${Math.round((72 / placement.scale) * Math.min(1, Math.sqrt(24000000 / (q.rect.w * q.rect.h))))} DPI · Görsel`
-                                      : 'Orijinal görsel';
-                                  })()}
-                          </small>
+                          <QuestionQuality
+                            item={placements.find((it) => it.q.id === q.id)}
+                            threshold={settings.minFontSize}
+                          />
+                          <Popover>
+                            <PopoverTrigger
+                              render={
+                                <button
+                                  className="secondary question-options-button"
+                                  aria-label={`${i + 1}. sorunun boyut ve yerleşimi`}
+                                />
+                              }
+                            >
+                              <SlidersHorizontal size={14} /> Boyut / yerleşim
+                            </PopoverTrigger>
+                            <PopoverContent className="question-options-popover">
+                              <QuestionOptions
+                                question={q}
+                                index={i}
+                                item={placements.find((it) => it.q.id === q.id)}
+                                settings={settings}
+                                onChange={(update) =>
+                                  updateQuestion(q.id, update)
+                                }
+                              />
+                            </PopoverContent>
+                          </Popover>
                         </article>
                       ))}
                     </div>
@@ -1137,12 +1524,17 @@ export default function Home() {
                   )}
                 </div>
               ) : (
-                <div className="layout-scroll">
+                <div className="layout-surface">
                   {layout.error ? (
                     <div className="layout-error">
                       <LayoutTemplate size={28} />
                       <h2>Yerleşimi ayarlayalım</h2>
                       <p>{layout.error}</p>
+                      {questions.some((q) => q.position) && (
+                        <button className="secondary" onClick={resetPlacement}>
+                          Elle yerleşimi sıfırla
+                        </button>
+                      )}
                     </div>
                   ) : !questions.length ? (
                     <div className="layout-error">
@@ -1157,85 +1549,26 @@ export default function Home() {
                       </button>
                     </div>
                   ) : (
-                    layout.pages.map((p, pi) => (
-                      <div key={pi} className="paper-wrap">
-                        <div
-                          className="paper"
-                          style={{ aspectRatio: `${PAGE.w}/${PAGE.h}` }}
-                        >
-                          {pi === 0 && (
-                            <HeaderGraphic
-                              header={header}
-                              className="paper-header"
-                              style={{
-                                height: `${(header.contentTop / PAGE.h) * 100}%`,
-                              }}
-                              aria-label="Test başlığı ve öğrenci bilgileri"
-                            />
-                          )}
-                          {columnDividerSegments(p, settings).map(
-                            (segment, i) => (
-                              <div
-                                key={i}
-                                className="paper-column-divider"
-                                style={{
-                                  top: `${(segment.top / PAGE.h) * 100}%`,
-                                  height: `${((segment.bottom - segment.top) / PAGE.h) * 100}%`,
-                                  borderColor: settings.lineColor || '#b8c2c7',
-                                }}
-                              />
-                            ),
-                          )}
-                          {p.items.map((it) => (
-                            <div
-                              key={it.q.id}
-                              className="placed-question"
-                              style={{
-                                left: `${(it.x / PAGE.w) * 100}%`,
-                                top: `${(it.y / PAGE.h) * 100}%`,
-                                width: `${(it.w / PAGE.w) * 100}%`,
-                                height: `${(it.h / PAGE.h) * 100}%`,
-                              }}
-                            >
-                              <span
-                                className={`paper-number number-${settings.numberStyle}`}
-                                style={{
-                                  color: settings.numberColor || undefined,
-                                  borderColor: settings.lineColor || '#b8c2c7',
-                                  ...(settings.numberStyle !== 'plain'
-                                    ? {
-                                        fontSize: `${(Math.min(9, settings.numberStyle === 'circle' || settings.numberStyle === 'square' ? 10 / (String(it.index + 1).length * 0.636) : 14 / ((String(it.index + 1).length + 0.5) * 0.556)) / PAGE.w) * 100}cqw`,
-                                      }
-                                    : {}),
-                                }}
-                              >
-                                {it.index + 1}
-                                {settings.numberStyle === 'circle' ||
-                                settings.numberStyle === 'square'
-                                  ? ''
-                                  : '.'}
-                              </span>
-                              <img
-                                src={it.q.thumb}
-                                alt={`${it.index + 1}. soru`}
-                              />
-                            </div>
-                          ))}
-                          <div
-                            className="paper-footer"
-                            style={{
-                              borderColor: settings.lineColor || undefined,
-                            }}
-                          >
-                            <span>{questions.length} soru</span>
-                            <span>
-                              {pi + 1} / {layout.pages.length}
-                            </span>
-                          </div>
-                        </div>
-                        <span className="paper-label">Sayfa {pi + 1} · A4</span>
-                      </div>
-                    ))
+                    <LayoutEditor
+                      pages={layout.pages}
+                      settings={settings}
+                      header={
+                        <HeaderGraphic
+                          header={header}
+                          className="paper-header"
+                          style={{
+                            height: `${(header.contentTop / PAGE.h) * 100}%`,
+                          }}
+                          aria-label="Test başlığı ve öğrenci bilgileri"
+                        />
+                      }
+                      onEdit={editQuestion}
+                      onUpdate={updateQuestion}
+                      onMove={moveQuestion}
+                      onRemoveEmptyPage={removeEmptyPage}
+                      onUndo={undoQuestions}
+                      canUndo={!!undo}
+                    />
                   )}
                 </div>
               )}
@@ -1380,7 +1713,8 @@ export default function Home() {
                       />
                     </div>
                     <small className="help-text">
-                      Büyütme sayfa sınırında durur; soruların oranı korunur.
+                      Her soru kendi sınırında durur; büyük bir soru diğerlerini
+                      küçültmez.
                     </small>
                     <div className="two-fields">
                       <label className="field">
@@ -1501,6 +1835,26 @@ export default function Home() {
                     </>
                   </TabsContent>
                   <TabsContent value="output" className="settings-tab-panel">
+                    <label className="field">
+                      Okunabilirlik uyarısı sınırı
+                      <Choice
+                        label="En küçük baskı puntosu"
+                        value={String(settings.minFontSize)}
+                        onChange={(v) => change('minFontSize', +v)}
+                        options={[
+                          [6, '6 pt'],
+                          [7, '7 pt'],
+                          [8, '8 pt'],
+                          [9, '9 pt'],
+                          [10, '10 pt'],
+                          [12, '12 pt'],
+                        ].map(([v, label]) => [String(v), String(label)])}
+                      />
+                    </label>
+                    <small className="help-text">
+                      Metinli PDF’de baskıdaki baskın yazı boyutu hesaplanır.
+                      Görsel ve taramalarda punto ölçülemez.
+                    </small>
                     <Toggle
                       label="Cevap anahtarı ekle"
                       checked={settings.answerKey}
@@ -1540,6 +1894,11 @@ export default function Home() {
                       >
                         Yerleşimi göster
                       </button>
+                      {questions.some((q) => q.position) && (
+                        <button className="text-btn" onClick={resetPlacement}>
+                          Elle yerleşimi sıfırla
+                        </button>
+                      )}
                     </div>
                   )}
                   <button
@@ -1553,14 +1912,18 @@ export default function Home() {
               </div>
             </aside>
           </section>
-        </>
+        </div>
       )}
       <Dialog
         open={cropOpen}
         onOpenChange={changeCropOpen}
         disablePointerDismissal
       >
-        <DialogContent className="crop-dialog" showCloseButton={false}>
+        <DialogContent
+          className="crop-dialog"
+          showCloseButton={false}
+          finalFocus={showHome ? resumeButton : undefined}
+        >
           <DialogTitle className="sr-only">
             {editing ? 'Soruyu düzenle' : 'PDF veya görselden soru seç'}
           </DialogTitle>
@@ -1569,9 +1932,15 @@ export default function Home() {
           </DialogDescription>
           <div className="crop-topbar">
             <div className="crop-heading">
-              <span className="crop-heading-icon">
-                <Scissors size={20} />
-              </span>
+              <button
+                type="button"
+                className="secondary home-button"
+                aria-label="Ana sayfaya dön"
+                disabled={!!busy}
+                onClick={returnHome}
+              >
+                <House size={17} /> Ana sayfa
+              </button>
               <div>
                 <strong>
                   {editing ? 'Soruyu düzenle' : 'Kaynağınızdan soru seçin'}
@@ -1669,7 +2038,7 @@ export default function Home() {
                   <Expand size={16} />
                   <span>Sığdır</span>
                 </IconButton>
-                {active?.kind === 'pdf' && (
+                {active && (
                   <IconButton
                     label="Sayfayı döndür"
                     className="icon-btn labeled-tool"
@@ -1710,7 +2079,10 @@ export default function Home() {
                         title={`${i + 1}. olası soruyu seç`}
                         aria-label={`${i + 1}. olası soruyu seç`}
                         onPointerDown={(e) => e.stopPropagation()}
-                        onClick={() => confirmSelection(r)}
+                        onClick={() => {
+                          selectedCandidate.current = r;
+                          confirmSelection(r);
+                        }}
                         className="candidate"
                         style={{
                           left: `${(r.x / render.width) * 100}%`,
@@ -1724,7 +2096,13 @@ export default function Home() {
                     ))}
                     {selection && (
                       <div
-                        className="selection"
+                        className="selection interactive-selection"
+                        ref={selectionFrame}
+                        role="application"
+                        aria-label="Seçilen soru çerçevesi; ok tuşlarıyla taşıyın"
+                        tabIndex={0}
+                        onPointerDown={(e) => transformStart(e, 'move')}
+                        onKeyDown={(e) => cropKeyboard(e)}
                         style={{
                           left: `${(selection.x / render.width) * 100}%`,
                           top: `${(selection.y / render.height) * 100}%`,
@@ -1732,7 +2110,65 @@ export default function Home() {
                           height: `${(selection.h / render.height) * 100}%`,
                         }}
                       >
-                        <span>Seçilen alan</span>
+                        <span>Seçilen alan · Taşı / köşeden boyutlandır</span>
+                        {(['nw', 'ne', 'sw', 'se'] as const).map(
+                          (handle, i) => (
+                            <button
+                              key={handle}
+                              className={`crop-handle handle-${handle}`}
+                              type="button"
+                              aria-label={`${['Sol üst', 'Sağ üst', 'Sol alt', 'Sağ alt'][i]} köşeyi boyutlandır`}
+                              onPointerDown={(e) => transformStart(e, handle)}
+                              onKeyDown={(e) => cropKeyboard(e, handle)}
+                            />
+                          ),
+                        )}
+                      </div>
+                    )}
+                    {selection && selectionReady && (
+                      <div
+                        className="floating-crop-answer"
+                        style={{
+                          top: `calc(${((selection.y + selection.h) / render.height) * 100}% + 10px)`,
+                          left: `clamp(0px, ${(selection.x / render.width) * 100}%, max(0px, 100% - 300px))`,
+                        }}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onPointerMove={(e) => e.stopPropagation()}
+                        onPointerUp={(e) => e.stopPropagation()}
+                      >
+                        <span>
+                          {editing
+                            ? questions.findIndex((q) => q.id === editing) + 1
+                            : questions.length + 1}
+                          . soru · Cevap
+                        </span>
+                        <div className="floating-answer-row">
+                          <AnswerPicker
+                            value={draftAnswer}
+                            onChange={setDraftAnswer}
+                            disabled={!!busy}
+                          />
+                          <button
+                            type="button"
+                            className="floating-add"
+                            aria-label={
+                              editing
+                                ? 'Seçilen sorunun kırpmasını güncelle'
+                                : 'Seçilen soruyu ekle'
+                            }
+                            disabled={
+                              !!busy || selection.w < 5 || selection.h < 5
+                            }
+                            onClick={() => void addSelection()}
+                          >
+                            {busy ? (
+                              <LoaderCircle size={13} className="spin" />
+                            ) : (
+                              <Plus size={13} />
+                            )}
+                            {editing ? 'Güncelle' : 'Ekle'}
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>
@@ -1745,7 +2181,10 @@ export default function Home() {
                 <div className="crop-instruction">
                   <span className="step-number">01</span>
                   <h2>Soru alanını seçin</h2>
-                  <p>Belgede sorunun etrafını sürükleyerek çizin.</p>
+                  <p>
+                    Alanı çizin; çerçeveyi taşıyın veya köşelerinden
+                    boyutlandırın. Ok tuşları: 1 birim, Shift + ok: 10 birim.
+                  </p>
                 </div>
                 <div className="crop-actions">
                   <div className="crop-tool-options">
@@ -1759,8 +2198,31 @@ export default function Home() {
                       disabled={!render || !!busy || active?.kind !== 'pdf'}
                       onClick={detect}
                     >
-                      <ScanLine size={16} /> Sınırları bul
+                      <ScanLine size={16} /> Soruları otomatik bul
                     </button>
+                    {candidates.length > 0 && (
+                      <div className="detected-question-actions">
+                        <button
+                          type="button"
+                          className="primary"
+                          disabled={!!busy || !render}
+                          onClick={() => void addDetectedQuestions()}
+                        >
+                          {busy.startsWith('Sorular ekleniyor') ? (
+                            <LoaderCircle size={16} className="spin" />
+                          ) : (
+                            <Plus size={16} />
+                          )}
+                          {busy.startsWith('Sorular ekleniyor')
+                            ? busy
+                            : `Tüm soruları ekle (${candidates.length})`}
+                        </button>
+                        <small>
+                          Bu sayfada bulunan soruları ekler. Cevapları sonra
+                          düzenleyebilirsiniz.
+                        </small>
+                      </div>
+                    )}
                     <Popover>
                       <PopoverTrigger
                         disabled={!!busy}
@@ -1785,15 +2247,16 @@ export default function Home() {
                           <button
                             className="secondary"
                             disabled={!render || !!busy}
-                            onClick={() =>
-                              render &&
-                              confirmSelection({
-                                x: 0,
-                                y: 0,
-                                w: render.width,
-                                h: render.height,
-                              })
-                            }
+                            onClick={() => {
+                              selectedCandidate.current = null;
+                              if (render)
+                                confirmSelection({
+                                  x: 0,
+                                  y: 0,
+                                  w: render.width,
+                                  h: render.height,
+                                });
+                            }}
                           >
                             Tüm sayfayı seç
                           </button>
@@ -1867,29 +2330,16 @@ export default function Home() {
                       <h2>Cevabı işaretleyin</h2>
                     </div>
                     {selection && selectionReady && (
-                      <div
-                        className="selection-answer-bar"
-                        ref={answerBar}
-                        onPointerDown={(e) => e.stopPropagation()}
-                        onPointerMove={(e) => e.stopPropagation()}
-                        onPointerUp={(e) => e.stopPropagation()}
-                      >
-                        <strong>
-                          {editing
-                            ? questions.findIndex((q) => q.id === editing) + 1
-                            : questions.length + 1}
-                          . soru · Doğru cevap
-                        </strong>
-                        <AnswerPicker
-                          value={draftAnswer}
-                          onChange={setDraftAnswer}
-                          disabled={!!busy}
-                        />
-                      </div>
+                      <p className="selected-answer-summary">
+                        Cevap: <b>{draftAnswer || 'Belirtilmedi'}</b>
+                        <br />
+                        Çerçevenin altındaki kutulardan seçin.
+                      </p>
                     )}
                     {(!selection || !selectionReady) && (
                       <p className="answer-placeholder">
-                        Alanı seçtiğinizde cevap seçenekleri burada görünür.
+                        Cevap kutuları seçtiğiniz çerçevenin hemen altında
+                        görünür.
                       </p>
                     )}
                   </div>
@@ -1902,6 +2352,7 @@ export default function Home() {
                         onClick={() => {
                           setSelection(null);
                           setSelectionReady(false);
+                          selectedCandidate.current = null;
                           if (!editing) setDraftAnswer('');
                         }}
                       >

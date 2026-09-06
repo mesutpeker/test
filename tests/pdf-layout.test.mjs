@@ -89,7 +89,7 @@ test('105% and larger sizes retain every A4 question within its column', () => {
       }
 });
 
-test('Scale increases by 5% when there is space and caps all sources together', () => {
+test('Scale increases when there is space and caps each question independently', () => {
   const narrow = question(1, { rect: { x: 0, y: 0, w: 100, h: 100 } });
   const at100 = layoutQuestions([narrow], [source], defaults)[0].items[0];
   const at105 = layoutQuestions([narrow], [source], {
@@ -107,9 +107,17 @@ test('Scale increases by 5% when there is space and caps all sources together', 
     scale: 140,
   });
   const items = pages.flatMap((p) => p.items);
-  assert.ok(
-    Math.abs(items[1].scale / items[0].scale - (9.5 / 12) * 1.25) < 0.00001,
-  );
+  for (const item of items) {
+    const alone = layoutQuestions([item.q], [source, other], {
+      ...defaults,
+      scale: 140,
+    })[0].items[0];
+    assert.equal(
+      item.scale,
+      alone.scale,
+      'Other sources do not alter this question scale',
+    );
+  }
   assertFits(pages, defaults);
 });
 

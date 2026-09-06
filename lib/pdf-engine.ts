@@ -7,6 +7,7 @@ import {
   type PDFPage,
 } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
+import { imageRotation } from './editor-geometry.ts';
 export function publicAsset(path: string) {
   return `${process.env.NEXT_PUBLIC_BASE_PATH || ''}/${path.replace(/^\/+/, '')}`;
 }
@@ -35,6 +36,10 @@ export type Question = {
   thumb: string;
   answer: string;
   wide: boolean;
+  scale?: number;
+  breakBefore?: 'page' | 'column';
+  ownPage?: boolean;
+  position?: { page: number; x: number; y: number };
 };
 export const headerStyles = [
   { value: 'institutional', label: 'Kurumsal' },
@@ -61,6 +66,7 @@ export type Settings = {
   answerKey: boolean;
   quality: 'vector' | '300' | '600';
   normalization: 'font' | 'column';
+  minFontSize: number;
 };
 export const defaults: Settings = {
   title: 'Konu değerlendirme testi',
@@ -81,6 +87,7 @@ export const defaults: Settings = {
   answerKey: false,
   quality: 'vector',
   normalization: 'font',
+  minFontSize: 8,
 };
 export const PAGE = { w: 595.2756, h: 841.8898 };
 export function testHeader(settings: Settings, questionCount: number) {
@@ -325,6 +332,131 @@ export type Placement = {
   scale: number;
 };
 export type LayoutPage = { items: Placement[]; contentTop: number };
+export function movePlacedQuestion(
+  questions: Question[],
+  pages: LayoutPage[],
+  id: string,
+  position: NonNullable<Question['position']>,
+): Question[] {
+  const positions = new Map(
+    pages.flatMap((page, index) =>
+      page.items.map(
+        (item) => [item.q.id, { page: index, x: item.x, y: item.y }] as const,
+      ),
+    ),
+  );
+  return questions.map((q) =>
+    q.id === id
+      ? { ...q, position, wide: q.wide || !!q.ownPage, ownPage: false }
+      : { ...q, position: positions.get(q.id) || q.position },
+  );
+}
+export function printedFontSize(item: Placement) {
+  return item.q.fontSize ? item.q.fontSize * item.scale : null;
+}
+export function placementsOverlap(a: Placement, b: Placement, gap = 0) {
+  // Include the number gutter, not only the cropped image.
+  return (
+    a.x - 17 < b.x + b.w + gap - 0.01 &&
+    a.x + a.w + gap > b.x - 17 + 0.01 &&
+    a.y < b.y + b.h + gap - 0.01 &&
+    a.y + a.h + gap > b.y + 0.01
+  );
+}
+export function adjustQuestionsForHeader(
+  questions: Question[],
+  sources: Source[],
+  previous: Settings,
+  next: Settings,
+): Question[] {
+  const top = testHeader(next, questions.length).contentTop;
+  const shift = top - testHeader(previous, questions.length).contentTop;
+  if (Math.abs(shift) < 0.01 || !questions.some((q) => q.position))
+    return questions;
+
+  return fitManualQuestions(
+    questions.map((q) =>
+      q.position?.page === 0
+        ? { ...q, position: { ...q.position, y: q.position.y + shift } }
+        : q,
+    ),
+    sources,
+    next,
+  );
+}
+export function removeEmptyLayoutPage(
+  questions: Question[],
+  sources: Source[],
+  settings: Settings,
+  pages: LayoutPage[],
+  pageIndex: number,
+): Question[] {
+  if (!pages[pageIndex] || pages[pageIndex].items.length) return questions;
+  const headerSpace =
+    testHeader(settings, questions.length).contentTop -
+    (settings.margin * 72) / 25.4;
+  const positions = new Map(
+    pages.flatMap((page, index) =>
+      page.items.map(
+        (item) =>
+          [
+            item.q.id,
+            {
+              page: index > pageIndex ? index - 1 : index,
+              x: item.x,
+              y: item.y + (pageIndex === 0 && index === 1 ? headerSpace : 0),
+            },
+          ] as const,
+      ),
+    ),
+  );
+  return fitManualQuestions(
+    questions.map((q) => ({ ...q, position: positions.get(q.id) })),
+    sources,
+    settings,
+  );
+}
+function fitManualQuestions(
+  questions: Question[],
+  sources: Source[],
+  next: Settings,
+): Question[] {
+  const top = testHeader(next, questions.length).contentTop;
+
+  // Measure with the same sizing rules as preview/export, without reserving
+  // coordinates that may no longer fit the page.
+  const sizes = new Map(
+    layoutQuestions(
+      questions.map((q) => ({ ...q, position: undefined })),
+      sources,
+      next,
+    ).flatMap((page) => page.items.map((item) => [item.q.id, item] as const)),
+  );
+  const margin = (next.margin * 72) / 25.4;
+  const bottom = PAGE.h - margin - 22;
+  const reserved = new Map<number, Placement[]>();
+  return questions.map((q) => {
+    if (!q.position) return q;
+    const position = q.position;
+    const item = { ...sizes.get(q.id)!, x: position.x, y: position.y };
+    const others = reserved.get(position.page) || [];
+    if (
+      item.x < margin + 17 - 0.01 ||
+      item.y < (position.page === 0 ? top : margin) - 0.01 ||
+      item.x + item.w > PAGE.w - margin + 0.01 ||
+      item.y + item.h > bottom + 0.01 ||
+      others.some(
+        (other) =>
+          q.ownPage || other.q.ownPage || placementsOverlap(item, other),
+      )
+    ) {
+      // Reflow only questions that no longer fit; retain all other anchors.
+      return { ...q, position: undefined };
+    }
+    reserved.set(position.page, [...others, item]);
+    return q;
+  });
+}
 export function columnDividerSegments(page: LayoutPage, settings: Settings) {
   if (
     !settings.columnDivider ||
@@ -336,7 +468,12 @@ export function columnDividerSegments(page: LayoutPage, settings: Settings) {
   let top = page.contentTop;
   const segments: { top: number; bottom: number }[] = [];
   for (const item of page.items
-    .filter((i) => i.q.wide)
+    .filter(
+      (i) =>
+        i.q.wide ||
+        i.q.ownPage ||
+        (i.x - 17 < PAGE.w / 2 && i.x + i.w > PAGE.w / 2),
+    )
     .sort((a, b) => a.y - b.y)) {
     const end = Math.min(bottom, item.y - 6);
     if (end > top) segments.push({ top, bottom: end });
@@ -373,114 +510,180 @@ export function layoutQuestions(
       100
     );
   };
-  const widthLimit = Math.min(
-    Infinity,
-    ...questions.map(
-      (q) =>
-        (q.wide ? PAGE.w - margin * 2 - numberGutter : contentWidth) /
-        (q.rect.w * nominalScale(q)),
-    ),
-  );
-  const heightLimit = Math.min(
-    Infinity,
-    ...questions.map(
-      (q, index) =>
-        (bottom - (index === 0 ? firstTop : margin)) /
-        (q.rect.h * nominalScale(q)),
-    ),
-  );
-  // Apply the user's size to the common baseline, then cap the entire set
-  // together. A single full-width crop must not invalidate every A4 page.
-  const commonScale = Math.min(
-    (Math.min(1, widthLimit) * settings.scale) / 100,
-    widthLimit,
-    heightLimit,
-  );
+  if (!questions.length) return [];
   const pages: LayoutPage[] = [];
-  let current: LayoutPage = { items: [], contentTop: firstTop };
-  let col = 0;
-  let cursor = firstTop;
-  let count = 0;
-  let bandTop = firstTop;
+  const exclusive = new Set<number>();
+  const pageAt = (n: number) => {
+    while (pages.length <= n)
+      pages.push({ items: [], contentTop: pages.length ? margin : firstTop });
+    return pages[n];
+  };
+  const dimensions = (q: Question, index: number) => {
+    const maxWidth =
+      q.wide || q.ownPage ? PAGE.w - margin * 2 - numberGutter : contentWidth;
+    // Keep dimensions independent of the drop destination. A moved question
+    // must not grow, shrink or change the other questions while being placed.
+    const top = index === 0 && !q.breakBefore ? firstTop : margin;
+    const baseline = nominalScale(q);
+    // Cap only this question. A large crop never changes another question's size.
+    const scale = Math.min(
+      (((baseline * settings.scale) / 100) * (q.scale ?? 100)) / 100,
+      maxWidth / q.rect.w,
+      (bottom - top) / q.rect.h,
+    );
+    if (!Number.isFinite(scale) || scale <= 0)
+      throw new Error(
+        `${index + 1}. sorunun boyutu geçersiz. Kırpmayı düzenleyin.`,
+      );
+    return { q, index, w: q.rect.w * scale, h: q.rect.h * scale, scale };
+  };
+  // Reserve manual positions before flowing automatic questions around them.
+  questions.forEach((q, index) => {
+    if (!q.position) return;
+    const { page, x, y } = q.position;
+    if (
+      !Number.isInteger(page) ||
+      page < 0 ||
+      page > 999 ||
+      !Number.isFinite(x + y)
+    )
+      throw new Error(`${index + 1}. sorunun sayfa konumu geçersiz.`);
+    const target = pageAt(page);
+    const item = { ...dimensions(q, index), x, y };
+    if (
+      x < margin + numberGutter - 0.01 ||
+      y < target.contentTop - 0.01 ||
+      x + item.w > PAGE.w - margin + 0.01 ||
+      y + item.h > bottom + 0.01
+    )
+      throw new Error(
+        `${index + 1}. soru sayfanın yazdırılabilir alanının dışında. Konumunu değiştirin veya otomatik yerleşime alın.`,
+      );
+    const collision = target.items.find((other) =>
+      placementsOverlap(item, other),
+    );
+    if (collision || exclusive.has(page) || (q.ownPage && target.items.length))
+      throw new Error(
+        `${index + 1}. soru${collision ? ` ile ${collision.index + 1}. soru` : ''} aynı alanı kullanıyor. Boş bir alana taşıyın.`,
+      );
+    target.items.push(item);
+    if (q.ownPage) exclusive.add(page);
+  });
+  let pageIndex = 0,
+    col = 0,
+    cursor = firstTop,
+    count = 0;
   const maxPerCol = settings.perPage
     ? Math.ceil(settings.perPage / settings.columns)
     : Infinity;
-  const flush = () => {
-    if (current.items.length) pages.push(current);
-    current = { items: [], contentTop: pages.length ? margin : firstTop };
+  const nextPage = () => {
+    pageIndex++;
     col = 0;
-    cursor = current.contentTop;
+    cursor = pageAt(pageIndex).contentTop;
     count = 0;
-    bandTop = current.contentTop;
+  };
+  const nextColumn = () => {
+    col++;
+    count = 0;
+    cursor = pageAt(pageIndex).contentTop;
+    if (col >= settings.columns) nextPage();
   };
   questions.forEach((q, index) => {
-    const source = sources.find((s) => s.id === q.sourceId);
-    if (!source) throw new Error('Bir sorunun kaynak dosyası bulunamadı.');
-    const scale = nominalScale(q) * commonScale;
-    const w = q.rect.w * scale,
-      h = q.rect.h * scale;
-    const maxWidth = q.wide ? PAGE.w - margin * 2 - numberGutter : contentWidth;
-    if (w > maxWidth + 1)
-      throw new Error(
-        `${index + 1}. soru sütundan geniş. Soruyu tam genişliğe alın veya ortak soru boyutunu küçültün.`,
-      );
-    if (h > bottom - margin + 1)
-      throw new Error(
-        `${index + 1}. soru bir sayfadan uzun. Ortak soru boyutunu küçültün veya seçimi daraltın.`,
-      );
-    if (q.wide && settings.columns === 2) {
-      if (current.items.length) flush();
-      current.items.push({
-        q,
-        index,
-        x: margin + numberGutter,
-        y: current.contentTop,
-        w,
-        h,
-        scale,
-      });
-      bandTop = current.contentTop + h + baseGap;
-      cursor = bandTop;
-      count = 0;
-      return;
+    if (q.position) return;
+    if (q.breakBefore === 'page' && pageAt(pageIndex).items.length) nextPage();
+    else if (q.breakBefore === 'column' && pageAt(pageIndex).items.length)
+      nextColumn();
+    if (q.ownPage) {
+      while (pageAt(pageIndex).items.length || exclusive.has(pageIndex))
+        nextPage();
     }
-    if (cursor + h > bottom || count >= maxPerCol) {
-      col++;
-      cursor = bandTop;
-      count = 0;
-      if (col >= settings.columns || cursor + h > bottom) flush();
+    const size = dimensions(q, index);
+    for (;;) {
+      if (exclusive.has(pageIndex)) {
+        nextPage();
+        continue;
+      }
+      const current = pageAt(pageIndex);
+      const fullWidth = q.wide || q.ownPage;
+      if (!fullWidth && count >= maxPerCol) {
+        nextColumn();
+        continue;
+      }
+      const x =
+        margin + (fullWidth ? 0 : col * (colWidth + gutter)) + numberGutter;
+      let y = fullWidth
+        ? Math.max(
+            current.contentTop,
+            ...current.items.map((it) => it.y + it.h + baseGap),
+          )
+        : Math.max(cursor, current.contentTop);
+      let item = { ...size, x, y };
+      for (;;) {
+        const collision = current.items.find((other) =>
+          placementsOverlap(item, other, baseGap),
+        );
+        if (!collision) break;
+        y = collision.y + collision.h + baseGap;
+        item = { ...item, y };
+      }
+      if (item.y + item.h > bottom + 0.01) {
+        if (fullWidth) nextPage();
+        else nextColumn();
+        continue;
+      }
+      current.items.push(item);
+      cursor = item.y + item.h + baseGap;
+      count++;
+      if (fullWidth) {
+        col = 0;
+        count = 0;
+      }
+      if (q.ownPage) {
+        exclusive.add(pageIndex);
+        nextPage();
+      }
+      break;
     }
-    current.items.push({
-      q,
-      index,
-      x: margin + col * (colWidth + gutter) + numberGutter,
-      y: cursor,
-      w,
-      h,
-      scale,
-    });
-    cursor += h + baseGap;
-    count++;
   });
-  flush();
+  while (pages.length && !pages[pages.length - 1].items.length) pages.pop();
   if (settings.balance) {
     for (const page of pages) {
-      for (let col = 0; col < settings.columns; col++) {
-        const x = margin + col * (colWidth + gutter) + numberGutter;
-        const items = page.items.filter(
-          (i) => !i.q.wide && Math.abs(i.x - x) < 1,
-        );
-        if (items.length < 2) continue;
-
-        const last = items[items.length - 1];
-        const extra = Math.min(
-          60,
-          Math.max(0, (bottom - last.y - last.h) / (items.length - 1)),
-        );
-        items.forEach((it, j) => (it.y += j * extra));
+      // Manual placements stay exactly where the user put them.
+      if (page.items.some((it) => it.q.position)) continue;
+      const bands = page.items
+        .filter((it) => it.q.wide || it.q.ownPage)
+        .sort((a, b) => a.y - b.y);
+      for (let c = 0; c < settings.columns; c++) {
+        const x = margin + c * (colWidth + gutter) + numberGutter;
+        for (let band = 0; band <= bands.length; band++) {
+          const top = band
+            ? bands[band - 1].y + bands[band - 1].h
+            : page.contentTop;
+          const end = band < bands.length ? bands[band].y - baseGap : bottom;
+          const items = page.items
+            .filter(
+              (it) =>
+                !it.q.wide &&
+                !it.q.ownPage &&
+                Math.abs(it.x - x) < 1 &&
+                it.y >= top - 0.01 &&
+                it.y < end,
+            )
+            .sort((a, b) => a.y - b.y);
+          if (items.length < 2) continue;
+          const last = items[items.length - 1];
+          const extra = Math.min(
+            60,
+            Math.max(0, (end - last.y - last.h) / (items.length - 1)),
+          );
+          items.forEach((it, j) => {
+            it.y += j * extra;
+          });
+        }
       }
     }
   }
+  pages.forEach((p) => p.items.sort((a, b) => a.index - b.index));
   return pages;
 }
 let pdfjsPromise:
@@ -590,19 +793,27 @@ export async function renderSource(
     };
   }
   const image = source.image!;
-  const actual = Math.min(1, 1800 / image.naturalWidth);
-  canvas.width = Math.round(image.naturalWidth * actual);
-  canvas.height = Math.round(image.naturalHeight * actual);
+  const rotated = imageRotation(
+    image.naturalWidth,
+    image.naturalHeight,
+    rotation,
+  );
+  const actual = Math.min(1, 1800 / Math.max(rotated.width, rotated.height));
+  canvas.width = Math.round(rotated.width * actual);
+  canvas.height = Math.round(rotated.height * actual);
   ctx.fillStyle = '#fff';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+  ctx.scale(actual, actual);
+  ctx.translate(rotated.x, rotated.y);
+  ctx.rotate(rotated.radians);
+  ctx.drawImage(image, 0, 0);
   return {
     canvas,
-    width: image.naturalWidth,
-    height: image.naturalHeight,
+    width: rotated.width,
+    height: rotated.height,
     viewport: null,
     page: null,
-    rotation: 0,
+    rotation: rotated.angle,
   };
 }
 export type RenderedSource = Awaited<ReturnType<typeof renderSource>>;
@@ -996,17 +1207,17 @@ export async function rasterCrop(
   ctx.fillStyle = 'white';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   if (source.kind === 'image') {
-    ctx.drawImage(
-      source.image!,
-      q.rect.x,
-      q.rect.y,
-      q.rect.w,
-      q.rect.h,
-      0,
-      0,
-      canvas.width,
-      canvas.height,
+    const image = source.image!;
+    const rotated = imageRotation(
+      image.naturalWidth,
+      image.naturalHeight,
+      q.rotation,
     );
+    ctx.scale(scale, scale);
+    ctx.translate(-q.rect.x, -q.rect.y);
+    ctx.translate(rotated.x, rotated.y);
+    ctx.rotate(rotated.radians);
+    ctx.drawImage(image, 0, 0);
   } else {
     const page = await source.pdf!.getPage(q.page);
     const viewport = page.getViewport({ scale, rotation: q.rotation });
