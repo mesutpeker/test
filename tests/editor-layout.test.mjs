@@ -18,7 +18,7 @@ import {
   placementsOverlap,
   movePlacedQuestion,
   adjustQuestionsForHeader,
-  removeEmptyLayoutPage,
+  removeLayoutPage,
   testHeader,
   headerStyles,
   columnDividerSegments,
@@ -255,18 +255,7 @@ test('Deleting an empty middle page closes the gap without removing or moving qu
   ];
   const before = layoutQuestions(questions, [source], defaults);
   assert.equal(before[1].items.length, 0);
-  assert.equal(
-    removeEmptyLayoutPage(questions, [source], defaults, before, 0),
-    questions,
-    'A populated page cannot be deleted',
-  );
-  const adjusted = removeEmptyLayoutPage(
-    questions,
-    [source],
-    defaults,
-    before,
-    1,
-  );
+  const adjusted = removeLayoutPage(questions, [source], defaults, before, 1);
   const after = layoutQuestions(adjusted, [source], defaults);
   assert.equal(after.length, 2);
   assert.deepEqual(
@@ -283,6 +272,91 @@ test('Deleting an empty middle page closes the gap without removing or moving qu
   assert.equal(questions[1].position.page, 2, 'Undo state remains intact');
 });
 
+test('Deleting a populated middle page removes only its questions and preserves remaining content and positions', () => {
+  const questions = [
+    q(1),
+    q(2, { breakBefore: 'page', answer: 'B' }),
+    q(3, { answer: 'C' }),
+    q(4, { position: { page: 2, x: 85, y: 90 }, answer: 'D' }),
+  ];
+  const snapshot = structuredClone(questions);
+  const before = layoutQuestions(questions, [source], defaults);
+  assert.deepEqual(
+    before[1].items.map((it) => it.q.id),
+    ['2', '3'],
+  );
+  const adjusted = removeLayoutPage(questions, [source], defaults, before, 1);
+  const after = layoutQuestions(adjusted, [source], defaults);
+  assert.deepEqual(
+    after.map((p) => p.items.map((it) => it.q.id)),
+    [['1'], ['4']],
+  );
+  assert.deepEqual(
+    adjusted.map((question) => question.answer),
+    ['A', 'D'],
+  );
+  for (const item of items(after)) {
+    const old = items(before).find((it) => it.q.id === item.q.id);
+    assert.deepEqual(
+      [item.x, item.y, item.w, item.h],
+      [old.x, old.y, old.w, old.h],
+    );
+    assert.deepEqual(item.q.rect, old.q.rect);
+    assert.equal(item.q.sourceId, old.q.sourceId);
+  }
+  assert.deepEqual(
+    items(after).map((it) => it.index),
+    [0, 1],
+  );
+  assert.deepEqual(questions, snapshot, 'Undo retains the original questions');
+  assert.deepEqual(layoutQuestions(questions, [source], defaults), before);
+});
+
+test('Deleting the last populated page trims it, and deleting the only page leaves an empty test', () => {
+  const questions = [q(1), q(2, { ownPage: true })];
+  const before = layoutQuestions(questions, [source], defaults);
+  const remaining = removeLayoutPage(questions, [source], defaults, before, 1);
+  const after = layoutQuestions(remaining, [source], defaults);
+  assert.equal(after.length, 1);
+  assert.deepEqual(
+    remaining.map((question) => question.id),
+    ['1'],
+  );
+  const empty = removeLayoutPage(remaining, [source], defaults, after, 0);
+  assert.deepEqual(empty, []);
+  assert.deepEqual(layoutQuestions(empty, [source], defaults), []);
+  assert.equal(
+    removeLayoutPage(questions, [source], defaults, before, -1),
+    questions,
+  );
+  assert.equal(
+    removeLayoutPage(questions, [source], defaults, before, 99),
+    questions,
+  );
+});
+
+test('Deleting a populated first page keeps the next page below the header', () => {
+  const margin = (defaults.margin * 72) / 25.4;
+  const questions = [
+    q(1),
+    q(2, { position: { page: 1, x: 70, y: margin } }),
+    q(3, { position: { page: 2, x: 85, y: 90 } }),
+  ];
+  const before = layoutQuestions(questions, [source], defaults);
+  const remaining = removeLayoutPage(questions, [source], defaults, before, 0);
+  const after = layoutQuestions(remaining, [source], defaults);
+  assert.deepEqual(
+    after.map((p) => p.items.map((it) => it.q.id)),
+    [['2'], ['3']],
+  );
+  assert.equal(after[0].items[0].y, testHeader(defaults, 2).contentTop);
+  assert.equal(after[1].items[0].y, 90);
+  assert.deepEqual(
+    items(after).map((it) => it.index),
+    [0, 1],
+  );
+});
+
 test('Deleting an empty first page reserves header space and reflows any overflow', () => {
   const margin = (defaults.margin * 72) / 25.4;
   const bottom = PAGE.h - margin - 22;
@@ -292,13 +366,7 @@ test('Deleting an empty first page reserves header space and reflows any overflo
     q(3, { position: { page: 2, x: 85, y: 90 } }),
   ];
   const before = layoutQuestions(questions, [source], defaults);
-  const adjusted = removeEmptyLayoutPage(
-    questions,
-    [source],
-    defaults,
-    before,
-    0,
-  );
+  const adjusted = removeLayoutPage(questions, [source], defaults, before, 0);
   const after = layoutQuestions(adjusted, [source], defaults);
   assert.equal(after.length, 2);
   assert.ok(after.every((page) => page.items.length));
@@ -414,6 +482,80 @@ Object.assign(globalThis, {
       return canvas;
     },
   },
+});
+
+test('PDF export omits question totals for every header style while preserving layout, page numbers and answers', async () => {
+  const original = await PDFDocument.create();
+  const font = await original.embedFont(StandardFonts.Helvetica);
+  original
+    .addPage([600, 800])
+    .drawText('KEEP_QUESTION', { x: 20, y: 750, size: 10, font });
+  const src = { ...source, bytes: await original.save() };
+  const questions = [
+    q(1, {
+      rect: { x: 10, y: 30, w: 160, h: 60 },
+      pdfRect: { left: 10, right: 170, bottom: 710, top: 770 },
+    }),
+    q(2, {
+      rect: { x: 10, y: 30, w: 160, h: 60 },
+      pdfRect: { left: 10, right: 170, bottom: 710, top: 770 },
+      breakBefore: 'page',
+      answer: 'B',
+    }),
+  ];
+  const fonts = new Uint8Array(
+    await readFile(new URL('../public/fonts/DejaVuSans.ttf', import.meta.url)),
+  );
+  const pdfjs = await getPdfjs();
+  pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+    '../node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs',
+    import.meta.url,
+  ).href;
+  for (const style of headerStyles) {
+    const settings = { ...defaults, headerStyle: style.value, answerKey: true };
+    const preview = testHeader(settings, questions.length);
+    const exported = testHeader(settings, questions.length, false);
+    assert.ok(preview.texts.some((text) => text.text === '2 SORU'));
+    assert.equal(exported.contentTop, preview.contentTop);
+    assert.deepEqual(exported.lines, preview.lines);
+    assert.deepEqual(
+      exported.texts,
+      preview.texts.filter((text) => text.text !== '2 SORU'),
+    );
+    assert.deepEqual(
+      exported.boxes,
+      preview.boxes.filter((box) => box.color !== '#edf2fa'),
+    );
+    const result = await createPdf(questions, [src], settings, fonts);
+    const pdf = await pdfjs.getDocument({
+      data: result.bytes.slice(),
+      standardFontDataUrl: fileURLToPath(
+        new URL('../node_modules/pdfjs-dist/standard_fonts/', import.meta.url),
+      ),
+    }).promise;
+    try {
+      assert.equal(pdf.numPages, 3);
+      for (let index = 1; index <= pdf.numPages; index++) {
+        const text = await (await pdf.getPage(index)).getTextContent();
+        const strings = text.items.map((item) => item.str);
+        assert.ok(
+          !strings.some((value) => /^2\s+(SORU|soru)$/.test(value)),
+          `${style.value}: no question total on page ${index}`,
+        );
+        if (index <= 2) {
+          assert.ok(strings.includes(`${index} / 2`));
+          assert.ok(strings.includes('KEEP_QUESTION'));
+          assert.ok(strings.includes(`${index}.`));
+        } else {
+          assert.ok(strings.includes('Cevap anahtarı'));
+          assert.match(strings.join(' '), /1\.\s+A/);
+          assert.match(strings.join(' '), /2\.\s+B/);
+        }
+      }
+    } finally {
+      await pdf.loadingTask.destroy();
+    }
+  }
 });
 
 test('All image rotations keep crop pixels identical in preview and PDF raster export', async () => {

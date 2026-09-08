@@ -42,7 +42,8 @@ export function LayoutEditor({
   onEdit,
   onUpdate,
   onMove,
-  onRemoveEmptyPage,
+  onRemoveQuestion,
+  onRemovePage,
   onUndo,
   canUndo,
 }: {
@@ -52,7 +53,8 @@ export function LayoutEditor({
   onEdit: (q: Question) => void;
   onUpdate: (id: string, update: Partial<Question>) => void;
   onMove: (id: string, page: number, x: number, y: number) => boolean;
-  onRemoveEmptyPage: (page: number) => void;
+  onRemoveQuestion: (id: string) => void;
+  onRemovePage: (page: number) => void;
   onUndo: () => void;
   canUndo: boolean;
 }) {
@@ -225,6 +227,16 @@ export function LayoutEditor({
     setDrop(null);
     suppressClick.current = true;
   }
+  function removePage(page: number) {
+    pageToReveal.current = null;
+    setDrop(null);
+    setPlacing(false);
+    setMenuId('');
+    if (visiblePages[page]?.items.some((it) => it.q.id === selected))
+      setSelected('');
+    if (page >= pages.length) setExtraPages((n) => Math.max(0, n - 1));
+    else onRemovePage(page);
+  }
   function keyboard(e: React.KeyboardEvent, item: Placement, page: number) {
     if (e.key === 'Escape') {
       cancel();
@@ -364,11 +376,7 @@ export function LayoutEditor({
                     disabled={!!draggingId}
                     onClick={(e) => {
                       e.stopPropagation();
-                      pageToReveal.current = null;
-                      setDrop(null);
-                      if (pi >= pages.length)
-                        setExtraPages((n) => Math.max(0, n - 1));
-                      else onRemoveEmptyPage(pi);
+                      removePage(pi);
                     }}
                   >
                     <Trash2 size={14} /> Sayfayı sil
@@ -547,6 +555,21 @@ export function LayoutEditor({
                             <span>Konum seç</span>
                             <ChevronRight size={14} />
                           </button>
+                          <button
+                            type="button"
+                            className="question-menu-action"
+                            aria-label={`${it.index + 1}. soruyu sil`}
+                            onClick={() => {
+                              setMenuId('');
+                              setSelected('');
+                              setPlacing(false);
+                              setDrop(null);
+                              onRemoveQuestion(it.q.id);
+                            }}
+                          >
+                            <Trash2 size={16} />
+                            <span>Soruyu sil</span>
+                          </button>
                         </>
                       )}
                     </PopoverContent>
@@ -579,10 +602,24 @@ export function LayoutEditor({
                 </span>
               </div>
             </div>
-            <span className="paper-label">
-              Sayfa {pi + 1} · A4
-              {pi >= pages.length ? ' · Soru taşıyınca çıktıya eklenir' : ''}
-            </span>
+            <div className="paper-label">
+              <span>
+                Sayfa {pi + 1} · A4
+                {pi >= pages.length ? ' · Soru taşıyınca çıktıya eklenir' : ''}
+              </span>
+              {!!p.items.length && (
+                <button
+                  type="button"
+                  className="secondary remove-page-button"
+                  aria-label={`${pi + 1}. sayfayı ve içindeki soruları sil`}
+                  title="Bu sayfayı içindeki sorularla birlikte sil"
+                  disabled={!!draggingId}
+                  onClick={() => removePage(pi)}
+                >
+                  <Trash2 size={14} /> Sayfayı sil
+                </button>
+              )}
+            </div>
           </div>
         ))}
       </div>

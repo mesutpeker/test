@@ -1211,6 +1211,13 @@ button {
   color: #89969e;
   margin-top: 12px;
 }
+.paper-label .remove-page-button {
+  display: inline-flex;
+  margin-left: 12px;
+  padding: 5px 8px;
+  min-height: 30px;
+  font-size: 12px;
+}
 .layout-error {
   min-height: 470px;
   display: flex;

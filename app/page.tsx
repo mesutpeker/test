@@ -76,7 +76,7 @@ import {
   printedFontSize,
   movePlacedQuestion,
   adjustQuestionsForHeader,
-  removeEmptyLayoutPage,
+  removeLayoutPage,
   testHeader,
   headerStyles,
   createPdf,
@@ -907,9 +907,13 @@ export default function Home() {
     setError('');
     notice('Sorular otomatik yerleşime alındı.');
   }
-  function removeEmptyPage(pageIndex: number) {
+  function removeQuestion(id: string) {
+    remember();
+    setQuestions((qs) => qs.filter((q) => q.id !== id));
+  }
+  function removePage(pageIndex: number) {
     try {
-      const next = removeEmptyLayoutPage(
+      const next = removeLayoutPage(
         questions,
         sources,
         settings,
@@ -921,7 +925,11 @@ export default function Home() {
       remember();
       setQuestions(next);
       setError('');
-      notice('Boş sayfa silindi.');
+      notice(
+        next.length === questions.length
+          ? 'Boş sayfa silindi.'
+          : 'Sayfa ve içindeki sorular silindi.',
+      );
     } catch (e) {
       setError(errorMessage(e));
     }
@@ -1411,12 +1419,7 @@ export default function Home() {
                             <small>s. {q.page}</small>
                             <IconButton
                               label={`${i + 1}. soruyu sil`}
-                              onClick={() => {
-                                remember();
-                                setQuestions((s) =>
-                                  s.filter((it) => it.id !== q.id),
-                                );
-                              }}
+                              onClick={() => removeQuestion(q.id)}
                             >
                               <Trash2 size={14} />
                             </IconButton>
@@ -1547,6 +1550,11 @@ export default function Home() {
                       >
                         Soruları seç
                       </button>
+                      {undo && (
+                        <button className="secondary" onClick={undoQuestions}>
+                          <Undo2 size={16} /> Son düzenlemeyi geri al
+                        </button>
+                      )}
                     </div>
                   ) : (
                     <LayoutEditor
@@ -1565,7 +1573,8 @@ export default function Home() {
                       onEdit={editQuestion}
                       onUpdate={updateQuestion}
                       onMove={moveQuestion}
-                      onRemoveEmptyPage={removeEmptyPage}
+                      onRemoveQuestion={removeQuestion}
+                      onRemovePage={removePage}
                       onUndo={undoQuestions}
                       canUndo={!!undo}
                     />

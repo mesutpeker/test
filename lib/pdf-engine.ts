@@ -90,7 +90,11 @@ export const defaults: Settings = {
   minFontSize: 8,
 };
 export const PAGE = { w: 595.2756, h: 841.8898 };
-export function testHeader(settings: Settings, questionCount: number) {
+export function testHeader(
+  settings: Settings,
+  questionCount: number,
+  showQuestionCount = true,
+) {
   const margin = (settings.margin * 72) / 25.4;
   const width = PAGE.w - margin * 2;
   const style = settings.headerStyle || 'institutional';
@@ -198,24 +202,26 @@ export function testHeader(settings: Settings, questionCount: number) {
   } else {
     cursor += 8 * 1.28;
   }
-  const count = `${questionCount} SORU`;
-  const countSize = Math.min(7, 44 / (count.length * 0.7));
-  if (!monochrome)
-    boxes.push({
-      x: PAGE.w - margin - 62,
-      y: metadataTop - 1,
-      w: 54,
-      h: 14,
-      color: '#edf2fa',
+  if (showQuestionCount) {
+    const count = `${questionCount} SORU`;
+    const countSize = Math.min(7, 44 / (count.length * 0.7));
+    if (!monochrome)
+      boxes.push({
+        x: PAGE.w - margin - 62,
+        y: metadataTop - 1,
+        w: 54,
+        h: 14,
+        color: '#edf2fa',
+      });
+    texts.push({
+      text: count,
+      x: PAGE.w - margin - 35,
+      y: metadataTop + 8,
+      size: countSize,
+      color: muted,
+      align: 'center',
     });
-  texts.push({
-    text: count,
-    x: PAGE.w - margin - 35,
-    y: metadataTop + 8,
-    size: countSize,
-    color: muted,
-    align: 'center',
-  });
+  }
   cursor += 5;
   if (style === 'band') {
     const bandTop = cursor;
@@ -384,16 +390,18 @@ export function adjustQuestionsForHeader(
     next,
   );
 }
-export function removeEmptyLayoutPage(
+export function removeLayoutPage(
   questions: Question[],
   sources: Source[],
   settings: Settings,
   pages: LayoutPage[],
   pageIndex: number,
 ): Question[] {
-  if (!pages[pageIndex] || pages[pageIndex].items.length) return questions;
+  if (!pages[pageIndex]) return questions;
+  const removedIds = new Set(pages[pageIndex].items.map((item) => item.q.id));
+  const remaining = questions.filter((q) => !removedIds.has(q.id));
   const headerSpace =
-    testHeader(settings, questions.length).contentTop -
+    testHeader(settings, remaining.length).contentTop -
     (settings.margin * 72) / 25.4;
   const positions = new Map(
     pages.flatMap((page, index) =>
@@ -411,7 +419,7 @@ export function removeEmptyLayoutPage(
     ),
   );
   return fitManualQuestions(
-    questions.map((q) => ({ ...q, position: positions.get(q.id) })),
+    remaining.map((q) => ({ ...q, position: positions.get(q.id) })),
     sources,
     settings,
   );
@@ -1320,7 +1328,7 @@ export async function createPdf(
   for (let pi = 0; pi < pages.length; pi++) {
     const page = doc.addPage([PAGE.w, PAGE.h]);
     if (pi === 0) {
-      const header = testHeader(settings, questions.length);
+      const header = testHeader(settings, questions.length, false);
       for (const box of header.boxes) {
         page.drawRectangle({
           x: box.x,
@@ -1460,13 +1468,6 @@ export async function createPdf(
       onProgress?.(++done / questions.length);
     }
     line(page, PAGE.h - 30);
-    page.drawText(`${questions.length} soru`, {
-      x: margin,
-      y: 17,
-      font,
-      size: 8,
-      color: muted,
-    });
     const pageLabel = `${pi + 1} / ${pages.length}`;
     page.drawText(pageLabel, {
       x: PAGE.w - margin - font.widthOfTextAtSize(pageLabel, 8),
