@@ -1559,6 +1559,7 @@ export default function Home() {
                   ) : (
                     <LayoutEditor
                       pages={layout.pages}
+                      sources={sources}
                       settings={settings}
                       header={
                         <HeaderGraphic

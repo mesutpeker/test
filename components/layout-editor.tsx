@@ -1,6 +1,6 @@
 /* oxlint-disable next/no-img-element, jsx-a11y/no-noninteractive-tabindex, jsx-a11y/no-noninteractive-element-interactions */
 // The keyboard-operable A4 canvas uses role=application; all questions are buttons.
-// Local crop thumbnails share the PDF layout; they are not remote images.
+// Local source crops share the PDF layout; they are not remote images.
 'use client';
 import React, { useEffect, useRef, useState } from 'react';
 import {
@@ -28,15 +28,73 @@ import {
   PAGE,
   columnDividerSegments,
   placementsOverlap,
+  rasterCrop,
   type LayoutPage,
   type Placement,
   type Question,
   type Settings,
+  type Source,
 } from '@/lib/pdf-engine';
+
+function QuestionPreview({
+  question,
+  source,
+  width,
+  alt,
+}: {
+  question: Question;
+  source?: Source;
+  width: number;
+  alt: string;
+}) {
+  const [preview, setPreview] = useState<{
+    question: Question;
+    source: Source;
+    width: number;
+    url: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!source) return;
+    let cancelled = false;
+    let url: string | undefined;
+    // Render from the original source, never upscale the small list thumbnail.
+    // A4 is displayed at at most 595 CSS pixels, so 300 DPI also covers Retina.
+    const dpi = Math.max(300, 72 * (window.devicePixelRatio || 1));
+    void rasterCrop(source, question, width, dpi)
+      .then((bytes) => {
+        if (cancelled) return;
+        url = URL.createObjectURL(new Blob([bytes], { type: 'image/png' }));
+        setPreview({ question, source, width, url });
+      })
+      .catch(() => {
+        // Keep the existing thumbnail available if a source cannot be rendered.
+      });
+    return () => {
+      cancelled = true;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [source, question, width]);
+
+  return (
+    <img
+      src={
+        preview?.question === question &&
+        preview.source === source &&
+        preview.width === width
+          ? preview.url
+          : question.thumb
+      }
+      alt={alt}
+      draggable={false}
+    />
+  );
+}
 
 type Drop = { page: number; item: Placement; valid: boolean };
 export function LayoutEditor({
   pages,
+  sources,
   settings,
   header,
   onEdit,
@@ -48,6 +106,7 @@ export function LayoutEditor({
   canUndo,
 }: {
   pages: LayoutPage[];
+  sources: Source[];
   settings: Settings;
   header: React.ReactNode;
   onEdit: (q: Question) => void;
@@ -458,10 +517,13 @@ export function LayoutEditor({
                       setMenuId('');
                     }}
                   >
-                    <img
-                      src={it.q.thumb}
+                    <QuestionPreview
+                      question={it.q}
+                      source={sources.find(
+                        (source) => source.id === it.q.sourceId,
+                      )}
+                      width={it.w}
                       alt={`${it.index + 1}. soru`}
-                      draggable={false}
                     />
                   </button>
                   <Popover
@@ -586,7 +648,14 @@ export function LayoutEditor({
                     height: `${(drop.item.h / PAGE.h) * 100}%`,
                   }}
                 >
-                  <img src={drop.item.q.thumb} alt="" />
+                  <QuestionPreview
+                    question={drop.item.q}
+                    source={sources.find(
+                      (source) => source.id === drop.item.q.sourceId,
+                    )}
+                    width={drop.item.w}
+                    alt=""
+                  />
                   <span>
                     {drop.valid ? 'Buraya bırak' : 'Bu alan uygun değil'}
                   </span>
