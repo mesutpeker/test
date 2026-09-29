@@ -608,6 +608,20 @@ export function questionRects(
     const intruders = pool.filter((band) => band.left < a.cut!).length;
     return intruders <= pool.length * 0.34;
   });
+  // Questions of a column share one number gutter. A label that starts at or
+  // right of another number's body edge (a choice "B)", a premise "II.")
+  // lies inside a question and never starts one.
+  const numbers = accepted.filter(
+    (a) =>
+      !accepted.some(
+        (b) =>
+          b !== a &&
+          b.column === a.column &&
+          b.cut !== null &&
+          b.left < a.left - tolerance &&
+          a.left >= b.cut - tolerance,
+      ),
+  );
   const rects: PixelRect[] = [];
   layout.columns.forEach((column, c) => {
     const bands = column.bands;
@@ -615,7 +629,7 @@ export function questionRects(
       bands
         .slice(from + 1, to)
         .some((band) => band.bottom - band.top >= m * 0.4);
-    const sorted = accepted
+    const sorted = numbers
       .filter((a) => a.column === c)
       .sort((a, b) => a.top - b.top);
     // Three or more closely spaced aligned labels are answer choices or a
