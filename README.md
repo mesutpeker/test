@@ -10,7 +10,7 @@ PDF ve görseller tarayıcıda işlenir. Kullanıcının yüklediği dosyalar su
 
 - PDF, PNG, JPG ve WebP kaynaklarından soru kırpma
 - Geniş soru seçme penceresi, yakınlaştırma ve döndürme
-- Numaralı PDF sorularının sınırlarını bulma; kaynak numarasını seçim dışında bırakma
+- Numaralı soruların sınırlarını bulma (metinli PDF, taranmış PDF ve görseller); kaynak numarasını seçim dışında bırakma
 - Soru seçerken doğru cevabı işaretleme
 - Soru sıralama ve uygulamanın otomatik numaralandırması
 - A4, bir veya iki sütun, ortak soru boyutu ve düzenli boşluklar
@@ -49,7 +49,7 @@ npm run lint
 npm test
 ```
 
-Kaynak PDF numaralarının doğru ayrılması, soru içeriğinin korunması ve Safari uyumlu PDF metin okuma için testler bulunur. Metin katmanı olmayan veya numarası güvenle ayrılamayan kaynaklarda sorular elle seçilebilir.
+Kaynak PDF numaralarının doğru ayrılması, soru içeriğinin korunması, taranmış sayfa ve görsellerde soru bulma ve Safari uyumlu PDF metin okuma için testler bulunur. Numarası veya sınırı güvenle ayrılamayan sorular (örneğin şıkları numarayla aynı hizada başlayan sorular) elle seçilebilir.
 
 `public/fonts` ve `public/pdfjs` klasörlerindeki üçüncü taraf dosyalarının lisansları ilgili klasörlerdedir.
 
@@ -63,4 +63,5 @@ Kaynak PDF numaralarının doğru ayrılması, soru içeriğinin korunması ve S
 - Kırpma çerçevesinin içinden taşıyın veya dört köşeden boyutlandırın. Çerçeve/köşe odaktayken ok tuşlarıyla ince ayar yapın. PDF ve görseller 90° adımlarla döndürülebilir.
 - Çerçevenin hemen altındaki küçük kutulardan cevabı seçip **Ekle** düğmesini kullanın. Mevcut bir soruda düğme **Güncelle** olur.
 - Boş önizleme sayfaları üzerlerindeki **Sayfayı sil** düğmesiyle kaldırılabilir. Sonraki sayfalar yeniden numaralanır; sorular korunur.
-- **Soruları otomatik bul**, açık PDF sayfasındaki soru alanlarını işaretler. Sonrasında görünen **Tüm soruları ekle** ile bu alanları tek işlemde ekleyin. Aynı kırpma tekrar eklenmez; toplu ekleme tek adımda geri alınabilir.
+- **Soruları otomatik bul**, açık sayfadaki soru alanlarını işaretler. Sonrasında görünen **Tüm soruları ekle** ile bu alanları tek işlemde ekleyin. Aynı kırpma tekrar eklenmez; toplu ekleme tek adımda geri alınabilir.
+- Otomatik bulma sayfa görüntüsünü inceler: sütun boşluğunu, satırları ve satır başındaki soru numaralarını bulur. Bu yüzden metin katmanı olmayan taranmış PDF'lerde, yazıları çizgiye dönüştürülmüş PDF'lerde ve PNG/JPG/WebP görsellerde de çalışır. PDF'de metin katmanı varsa numaralar ayrıca metinle doğrulanır. Sayfa altlığı (sayfa numarası, ders adı) ve sütun çizgisi soruya katılmaz.
