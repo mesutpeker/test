@@ -2,7 +2,7 @@
 
 PDF ve görsellerden soru seçerek düzenli, baskıya hazır A4 testleri oluşturur.
 
-**Uygulama:** https://mesutpeker.online/test/
+**Uygulama:** https://mesutpeker.com/test/
 
 PDF ve görseller tarayıcıda işlenir. Kullanıcının yüklediği dosyalar sunucuya gönderilmez.
 
@@ -37,7 +37,7 @@ node scripts/verify-pages.mjs
 
 Statik yayın dosyaları `dist/client/test/` klasörüne çıkar. Bu klasörün içeriği `/test/` adresinde sunulur. Kaynaklar, PDF worker dosyası ve yazı tipleri bu yola göre hazırlanır.
 
-GitHub reposunun **Settings → Pages** bölümünde kaynak **GitHub Actions** olmalıdır. `main` dalına gönderilen değişiklikler `.github/workflows/pages.yml` tarafından test edilip yayımlanır. `mesutpeker.github.io` ana sitesinin alan adı sayesinde proje `https://mesutpeker.online/test/` adresinden açılır.
+GitHub reposunun **Settings → Pages** bölümünde kaynak **GitHub Actions** olmalıdır. `main` dalına gönderilen değişiklikler `.github/workflows/pages.yml` tarafından test edilip yayımlanır. `mesutpeker.github.io` ana sitesinin alan adı sayesinde proje `https://mesutpeker.com/test/` adresinden açılır.
 
 Standart `npm run build` komutu mevcut Sites/Cloudflare derleme desteğini korur. GitHub Pages derlemesi sunucu veya Sites oturumu gerektirmez.
 
