@@ -164,10 +164,15 @@ test('An overstated label advance cannot crop a separately positioned first word
           },
         }),
       );
-    assert.deepEqual(
-      await detectQuestions(await renderSource(source, 1, 1.6), 2),
-      [],
-    );
+    const rects = await detectQuestions(await renderSource(source, 1, 1.6), 2);
+    assert.ok(rects.length <= 1);
+    for (const rect of rects) {
+      // The rendered gap after "8." decides the crop, never the reported width.
+      assert.ok(
+        rect.x > 49 && rect.x <= 70,
+        `Crop must start between the label and the first word, got ${rect.x}`,
+      );
+    }
   } finally {
     await source.pdf.loadingTask.destroy();
   }

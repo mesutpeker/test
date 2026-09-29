@@ -8,6 +8,13 @@ import {
 } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
 import { imageRotation } from './editor-geometry.ts';
+import {
+  analyzeLayout,
+  bandAt,
+  columnAt,
+  questionRects,
+  type Anchor,
+} from './question-detection.ts';
 export function publicAsset(path: string) {
   return `${process.env.NEXT_PUBLIC_BASE_PATH || ''}/${path.replace(/^\/+/, '')}`;
 }
@@ -1065,61 +1072,43 @@ async function inlineNumberEnd(
   return (left + (mark.right + body.left) / 2) / sx;
 }
 
-/** A rectangular crop must not discard text, choices or diagrams below the label. */
-function hasContentBelowNumber(
-  render: RenderedSource,
-  left: number,
-  right: number,
-  top: number,
-  bottom: number,
-) {
-  const sx = render.canvas.width / render.width;
-  const sy = render.canvas.height / render.height;
-  const x = Math.max(0, Math.floor(left * sx));
-  const y = Math.max(0, Math.floor(top * sy));
-  const w = Math.min(render.canvas.width - x, Math.ceil(right * sx) - x);
-  const h = Math.min(render.canvas.height - y, Math.ceil(bottom * sy) - y);
-  if (w <= 0 || h <= 0) return false;
-  const data = render.canvas.getContext('2d')!.getImageData(x, y, w, h).data;
-  for (let i = 0; i < data.length; i += 4) {
-    if (data[i + 3] > 40 && Math.min(data[i], data[i + 1], data[i + 2]) < 225)
-      return true;
-  }
-  return false;
-}
-
 export async function detectQuestions(
   render: RenderedSource,
   columns: number,
 ): Promise<Rect[]> {
-  // Candidate boxes use numbered text anchors. Scans remain manually selectable.
-  if (!render.page) return [];
-  const tc = await readPageText(render.page);
-  const anchors: {
-    x: number;
-    y: number;
-    baseline: number;
-    size: number;
-    left: number | null;
-  }[] = [];
-  for (const item of tc.items) {
-    if (!('str' in item)) continue;
-    const m = item.str?.match(/^\s*(\d{1,3})\s*([.)])(?!\d)\s*/);
-    if (!m) continue;
-    const p = render.viewport.convertToViewportPoint(
-      item.transform[4],
-      item.transform[5],
-    );
-    const direction = render.viewport.convertToViewportPoint(
-      item.transform[4] + item.transform[0],
-      item.transform[5] + item.transform[1],
-    );
-    // Sideways text has no safe left-to-right number gutter; it remains manually selectable.
-    if (direction[0] <= p[0] || Math.abs(direction[1] - p[1]) > 0.1) continue;
-    if (p[1] < render.height * 0.065 || p[1] > render.height * 0.93) continue;
-    const col = columns === 2 && p[0] > render.width * 0.48 ? 1 : 0;
-    const local = p[0] - (col * render.width) / 2;
-    if (local < render.width * 0.15) {
+  // Rendered pixels find columns, lines and number labels, so scans, outlined
+  // text and images work. A PDF text layer adds exact digits and label edges.
+  const { canvas } = render;
+  const layout = analyzeLayout(
+    canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height)
+      .data,
+    canvas.width,
+    canvas.height,
+    columns,
+  );
+  const sx = canvas.width / render.width,
+    sy = canvas.height / render.height;
+  const anchors: Anchor[] = [];
+  if (render.page) {
+    const tc = await readPageText(render.page).catch(() => ({ items: [] }));
+    for (const item of tc.items) {
+      if (!('str' in item)) continue;
+      const m = item.str?.match(/^\s*(\d{1,3})\s*([.)])(?!\d)\s*/);
+      if (!m) continue;
+      const p = render.viewport.convertToViewportPoint(
+        item.transform[4],
+        item.transform[5],
+      );
+      const direction = render.viewport.convertToViewportPoint(
+        item.transform[4] + item.transform[0],
+        item.transform[5] + item.transform[1],
+      );
+      // Sideways text has no safe left-to-right number gutter; it remains manually selectable.
+      if (direction[0] <= p[0] || Math.abs(direction[1] - p[1]) > 0.1) continue;
+      if (p[1] < render.height * 0.065 || p[1] > render.height * 0.93) continue;
+      const column = columnAt(layout, p[0] * sx);
+      if (p[0] - layout.columns[column].start / sx >= render.width * 0.15)
+        continue;
       const size = Math.hypot(item.transform[2], item.transform[3]);
       let left = item.str.slice(m[0].length).trim()
         ? await inlineNumberEnd(
@@ -1152,47 +1141,59 @@ export async function detectQuestions(
         })
       )
         left = null;
+      const top = (p[1] - size - 3) * sy,
+        bottom = (p[1] + size * 0.3) * sy;
       anchors.push({
-        x: p[0],
-        y: p[1] - size,
-        baseline: p[1],
-        size,
-        left,
+        column,
+        band: bandAt(layout, column, top, bottom),
+        left: p[0] * sx,
+        right: NaN,
+        cut: left === null ? null : left * sx,
+        top,
+        bottom,
+        trusted: true,
       });
     }
   }
-  const result: Rect[] = [];
-  for (let c = 0; c < columns; c++) {
-    const items = anchors
-      .filter((a) => columns === 1 || (a.x > render.width * 0.48 ? 1 : 0) === c)
-      .sort((a, b) => a.y - b.y);
-    for (let i = 0; i < items.length; i++) {
-      const a = items[i];
-      if (i && a.y - items[i - 1].y < 20) continue;
-      const right = ((c + 1) * render.width) / columns - render.width * 0.008;
-      const end = items[i + 1]?.y ?? render.height * 0.96;
-      const left = a.left;
-      if (
-        left === null ||
-        left >= right ||
-        hasContentBelowNumber(
-          render,
-          a.x - 2,
-          left,
-          a.baseline + a.size * 0.3,
-          end - 4,
-        )
-      )
-        continue;
-      result.push({
-        x: Math.max(0, left),
-        y: Math.max(0, a.y - 3),
-        w: right - left,
-        h: Math.max(20, end - a.y - 4),
-      });
-    }
-  }
-  return result.slice(0, 30);
+  // Where the text layer has words, a pixel label must start with a digit.
+  // This keeps "A)" choice labels from being taken for question numbers.
+  const words = render.page
+    ? (await readPageText(render.page).catch(() => ({ items: [] }))).items
+        .flatMap((item) => {
+          if (!('str' in item) || !item.str.trim()) return [];
+          const p = render.viewport.convertToViewportPoint(
+            item.transform[4],
+            item.transform[5],
+          );
+          const direction = render.viewport.convertToViewportPoint(
+            item.transform[4] + item.transform[0],
+            item.transform[5] + item.transform[1],
+          );
+          if (direction[0] <= p[0] || Math.abs(direction[1] - p[1]) > 0.1)
+            return [];
+          const size = Math.hypot(item.transform[2], item.transform[3]);
+          return [
+            {
+              text: item.str.trim(),
+              x0: p[0] * sx,
+              x1: (p[0] + item.width) * sx,
+              y0: (p[1] - size) * sy,
+              y1: (p[1] + size * 0.2) * sy,
+            },
+          ];
+        })
+        .sort((a, b) => a.x0 - b.x0)
+    : [];
+  const isNumberLabel = (a: Anchor) => {
+    const word = words.find(
+      (w) => w.x0 < a.right && w.x1 > a.left && w.y0 < a.bottom && w.y1 > a.top,
+    );
+    return !word || /^\(?\d/.test(word.text);
+  };
+  return questionRects(layout, anchors, isNumberLabel)
+    .map((r) => ({ x: r.x / sx, y: r.y / sy, w: r.w / sx, h: r.h / sy }))
+    .filter((r) => r.w >= 5 && r.h >= 5)
+    .slice(0, 30);
 }
 export async function rasterCrop(
   source: Source,

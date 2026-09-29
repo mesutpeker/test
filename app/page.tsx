@@ -796,7 +796,7 @@ export default function Home() {
       notice(
         rects.length
           ? `${rects.length} olası soru bulundu. Tek tek seçebilir veya tümünü ekleyebilirsiniz.`
-          : 'Numaralı soru sınırı bulunamadı. Sorunun etrafında sürükleyerek seçin.',
+          : 'Güvenle ayrılabilen numaralı soru bulunamadı. Sorunun etrafında sürükleyerek seçin.',
       );
     } catch {
       setError('Otomatik seçim yapılamadı. Elle kırpmaya devam edebilirsiniz.');
@@ -2205,7 +2205,7 @@ export default function Home() {
                     />
                     <button
                       className="secondary detect-button"
-                      disabled={!render || !!busy || active?.kind !== 'pdf'}
+                      disabled={!render || !!busy}
                       onClick={detect}
                     >
                       <ScanLine size={16} /> Soruları otomatik bul
