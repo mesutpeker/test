@@ -373,3 +373,77 @@ test('Boxed numbers without punctuation are found from rendered pixels', async (
     await source.pdf.loadingTask.destroy();
   }
 });
+
+test('Premises and long answer choices inside a question never split it', async () => {
+  // Numbers in the gutter; "I."/"II." premises and three-line choices start
+  // at the body edge, as in printed workbooks.
+  const { bytes } = await pdfBytes((page, font, bold) => {
+    for (const [n, x, y] of [
+      [5, 40, 740],
+      [8, 320, 740],
+    ]) {
+      page.drawText(`${n}.`, { x, y, size: 10, font: bold, color: orange });
+      let cy = y;
+      for (const premise of ['I.', 'II.', 'III.']) {
+        page.drawText(premise, {
+          x: x + 30 - bold.widthOfTextAtSize(premise, 9),
+          y: cy,
+          size: 9,
+          font: bold,
+        });
+        page.drawText('Premise sentence that wraps', {
+          x: x + 36,
+          y: cy,
+          size: 9,
+          font,
+        });
+        page.drawText('onto a second line', {
+          x: x + 36,
+          y: cy - 13,
+          size: 9,
+          font,
+        });
+        cy -= 34;
+      }
+      page.drawText('Which premises agree?', {
+        x: x + 18,
+        y: cy,
+        size: 9,
+        font: bold,
+      });
+      cy -= 22;
+      for (const letter of 'ABCDE') {
+        page.drawText(`${letter})`, { x: x + 18, y: cy, size: 9, font });
+        for (let line = 0; line < 3; line++)
+          page.drawText('Long choice text line', {
+            x: x + 32,
+            y: cy - line * 13,
+            size: 9,
+            font,
+          });
+        cy -= 50;
+      }
+    }
+  });
+  for (const make of [
+    async () => bytes,
+    async () => (await scanned(bytes)).bytes,
+  ]) {
+    const source = await sourceFrom(await make());
+    try {
+      const rects = await detectQuestions(
+        await renderSource(source, 1, 1.6),
+        2,
+      );
+      assert.equal(rects.length, 2, 'One crop per question');
+      for (const [i, rect] of rects.entries()) {
+        const x = i ? 320 : 40;
+        assert.ok(rect.x > x + 8 && rect.x < x + 18, `crop x ${rect.x}`);
+        // The crop reaches the last line of choice E.
+        assert.ok(rect.y + rect.h >= H - (740 - 3 * 34 - 22 - 4 * 50 - 26));
+      }
+    } finally {
+      await source.pdf.loadingTask.destroy();
+    }
+  }
+});
